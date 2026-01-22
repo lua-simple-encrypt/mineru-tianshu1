@@ -403,7 +403,71 @@ python start_all.py --enable-mcp  # MCP Server 端口 8002（默认）
 
 ## 🚢 生产部署
 
-推荐使用 Docker 部署。如需手动部署：
+### 离线部署（推荐）
+
+Tianshu 支持**完全离线部署**，提供两种部署模式：
+
+#### 方式 1：统一版（GPU 自动降级 CPU）
+
+适用于 Linux 服务器（有 GPU 则加速，无 GPU 自动降级 CPU）：
+
+```bash
+# 1. 在联网环境构建镜像（Linux/Mac 均可）
+./scripts/build-offline.sh
+
+# 2. 传输到生产服务器
+rsync -avz docker-images/ user@prod-server:/opt/tianshu/
+
+# 3. 在生产服务器部署（自动检测 GPU/CPU）
+cd /opt/tianshu
+./deploy-offline.sh
+```
+
+#### 方式 2：CPU 专用版（Mac/无 GPU 环境）
+
+适用于 Mac（Apple Silicon/Intel）和无 GPU 的 Linux 环境：
+
+```bash
+# 1. 在联网环境构建镜像
+./scripts/build-offline.sh
+
+# 2. 传输构建产物（可选：直接在目标机器构建可跳过此步）
+rsync -avz docker-images/ user@target:/opt/tianshu/
+
+# 3. 在目标机器部署（强制 CPU 模式）
+cd /opt/tianshu
+./deploy-offline-cpu.sh
+```
+
+**特点**：
+- ✅ **统一镜像**：自动检测 GPU，有则加速，无则 CPU 降级
+- ✅ **跨平台构建**：支持在 Mac（Apple Silicon/Intel）构建 Linux amd64 镜像
+- ✅ **完全离线**：所有模型（~15GB）和依赖预先打包
+- ✅ **一键部署**：自动配置环境变量、JWT 密钥、RustFS 对象存储
+- ✅ **Office 文档支持**：自动转换 .doc/.docx/.pptx 等格式为 PDF 后处理
+
+**关键修复**：
+- 🔧 Worker uploads 目录读写权限（支持 Office 转 PDF）
+- 🔧 albumentations/albucore 版本锁定（解决 MinerU 公式识别依赖）
+- 🔧 RustFS 镜像平台指定（确保 amd64 架构一致性）
+
+📖 **详细说明**：[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)
+
+### 在线 Docker 部署
+
+推荐使用 Docker Compose 一键部署：
+
+```bash
+# 一键部署
+docker compose up -d
+
+# 或使用 Make 命令
+make setup
+```
+
+### 手动部署
+
+如需手动部署：
 
 **前端构建**：`cd frontend && npm run build`（产物在 `dist/`）
 

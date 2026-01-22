@@ -76,6 +76,29 @@ initialize_directories() {
 }
 
 # ============================================================================
+# Model initialization
+# ============================================================================
+initialize_models() {
+    log_info "Initializing models..."
+
+    # 检查是否有外部模型卷挂载
+    if [ -d "/models-external" ]; then
+        # 调用统一的模型初始化脚本
+        INIT_SCRIPT="/usr/local/bin/init-models.sh"
+
+        if [ -f "$INIT_SCRIPT" ]; then
+            log_info "Running model initialization script: $INIT_SCRIPT"
+            bash "$INIT_SCRIPT" || log_warning "Model initialization script failed, continuing..."
+        else
+            log_warning "Model initialization script not found: $INIT_SCRIPT"
+        fi
+    else
+        log_warning "External models directory (/models-external) not found"
+        log_warning "Models will be downloaded on first use"
+    fi
+}
+
+# ============================================================================
 # Model check
 # ============================================================================
 check_models() {
@@ -183,6 +206,12 @@ main() {
     check_environment "$SERVICE_TYPE"
     initialize_directories
     initialize_database
+
+    # Initialize models before checking (for worker only)
+    if [ "$SERVICE_TYPE" = "worker" ]; then
+        initialize_models
+    fi
+
     check_models
 
     # Execute different checks based on service type

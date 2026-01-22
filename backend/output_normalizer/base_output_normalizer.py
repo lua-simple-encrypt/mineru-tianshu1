@@ -7,6 +7,7 @@ from typing import Dict, Any
 from loguru import logger
 import re
 import json
+import os
 
 
 class BaseOutputNormalizer:
@@ -86,6 +87,16 @@ class BaseOutputNormalizer:
 
     def _process_rustfs_upload(self, result: Dict[str, Any]):
         """处理 RustFS 上传和 URL 替换"""
+
+        # 检查是否启用 RustFS
+        rustfs_enabled = os.getenv("RUSTFS_ENABLED", "true").lower() in ("true", "1", "yes")
+
+        if not rustfs_enabled:
+            logger.info("ℹ️  RustFS is disabled (RUSTFS_ENABLED=false), using local file service")
+            result["rustfs_enabled"] = False
+            result["images_uploaded"] = False
+            return
+
         try:
             logger.info(f"📤 Uploading {result['image_count']} images to RustFS...")
             url_mapping = self._upload_images_to_rustfs(result["image_dir"])

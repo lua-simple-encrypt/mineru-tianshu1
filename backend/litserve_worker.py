@@ -261,6 +261,17 @@ class MinerUWorkerAPI(ls.LitAPI):
             logger.warning(f"⚠️  Unknown model download source: {model_source}")
 
         self.device = device
+        # 保存 accelerator 类型（从 device 字符串推断）
+        # device 可能是 "cuda:0", "cuda:1", "cpu" 等
+        if "cuda" in str(device):
+            self.accelerator = "cuda"
+            self.engine_device = "cuda:0"  # 引擎统一使用 cuda:0（因为已设置 CUDA_VISIBLE_DEVICES）
+        else:
+            self.accelerator = "cpu"
+            self.engine_device = "cpu"  # CPU 模式
+
+        logger.info(f"🎯 [Device] Accelerator: {self.accelerator}, Engine Device: {self.engine_device}")
+
         # 从类属性获取配置（由 start_litserve_workers 设置）
         # 默认使用共享输出目录（Docker 环境）
         project_root = Path(__file__).parent.parent
@@ -514,6 +525,27 @@ class MinerUWorkerAPI(ls.LitAPI):
             # 检查文件扩展名
             file_ext = Path(file_path).suffix.lower()
 
+            # 【新增】Office 转 PDF 预处理
+            office_extensions = [".docx", ".xlsx", ".pptx", ".doc", ".xls", ".ppt"]
+            if file_ext in office_extensions and options.get("convert_office_to_pdf", False):
+                logger.info(f"📄 [Preprocessing] Converting Office to PDF: {file_path}")
+                try:
+                    pdf_path = self._convert_office_to_pdf(file_path)
+
+                    # 更新文件路径和扩展名
+                    original_file_path = file_path
+                    file_path = pdf_path
+                    file_ext = ".pdf"
+
+                    logger.info(f"✅ [Preprocessing] Office converted, continuing with PDF: {pdf_path}")
+                    logger.info(f"   Original: {Path(original_file_path).name}")
+                    logger.info(f"   Converted: {Path(pdf_path).name}")
+
+                except Exception as e:
+                    logger.warning(f"⚠️ [Preprocessing] Office to PDF conversion failed: {e}")
+                    logger.warning(f"   Falling back to MarkItDown for: {file_path}")
+                    # 转换失败，继续使用原文件（MarkItDown 处理）
+
             # 检查是否需要拆分 PDF（仅对非子任务的 PDF 进行判断）
             if file_ext == ".pdf" and not parent_task_id:
                 if self._should_split_pdf(task_id, file_path, task, options):
@@ -687,11 +719,15 @@ class MinerUWorkerAPI(ls.LitAPI):
         if self.mineru_pipeline_engine is None:
             from mineru_pipeline import MinerUPipelineEngine
 
-            # 注意：由于在 setup() 中已设置 CUDA_VISIBLE_DEVICES，
+            # 使用动态设备选择（支持 CPU/CUDA）
+            # 注意：CUDA 模式下已在 setup() 中设置 CUDA_VISIBLE_DEVICES，
             # 该进程只能看到一个 GPU（映射为 cuda:0）
-            self.mineru_pipeline_engine = MinerUPipelineEngine(device="cuda:0")
-            gpu_id = os.environ.get("CUDA_VISIBLE_DEVICES", "?")
-            logger.info(f"✅ MinerU Pipeline engine loaded on cuda:0 (physical GPU {gpu_id})")
+            self.mineru_pipeline_engine = MinerUPipelineEngine(device=self.engine_device)
+            if self.accelerator == "cuda":
+                gpu_id = os.environ.get("CUDA_VISIBLE_DEVICES", "?")
+                logger.info(f"✅ MinerU Pipeline engine loaded on cuda:0 (physical GPU {gpu_id})")
+            else:
+                logger.info("✅ MinerU Pipeline engine loaded on CPU")
 
         # 设置输出目录
         output_dir = Path(self.output_dir) / Path(file_path).stem
@@ -715,29 +751,136 @@ class MinerUWorkerAPI(ls.LitAPI):
         }
 
     def _process_with_markitdown(self, file_path: str) -> dict:
-        """使用 MarkItDown 处理 Office 文档"""
+        """使用 MarkItDown 处理 Office 文档（增强版：支持 DOCX 图片提取）"""
         if not self.markitdown:
             raise RuntimeError("MarkItDown is not available")
-
-        # 处理文件
-        result = self.markitdown.convert(file_path)
 
         # 创建输出目录（与其他引擎保持一致）
         output_dir = Path(self.output_dir) / Path(file_path).stem
         output_dir.mkdir(parents=True, exist_ok=True)
 
+        # 处理文件：提取文本
+        result = self.markitdown.convert(file_path)
+        markdown_content = result.text_content
+
+        # 如果是 DOCX 文件，提取嵌入的图片
+        file_ext = Path(file_path).suffix.lower()
+        if file_ext == ".docx":
+            try:
+                from utils.docx_image_extractor import extract_images_from_docx, append_images_to_markdown
+
+                # 提取图片到 images 目录
+                images_dir = output_dir / "images"
+                images = extract_images_from_docx(file_path, str(images_dir))
+
+                # 如果有图片，将图片引用添加到 Markdown
+                if images:
+                    markdown_content = append_images_to_markdown(markdown_content, images)
+                    logger.info(f"🖼️  Extracted {len(images)} images from DOCX")
+
+            except Exception as e:
+                logger.warning(f"⚠️  Failed to extract images from DOCX: {e}")
+                # 继续处理，不影响文本提取
+
         # 保存结果到目录中
         output_file = output_dir / f"{Path(file_path).stem}_markitdown.md"
-        output_file.write_text(result.text_content, encoding="utf-8")
+        output_file.write_text(markdown_content, encoding="utf-8")
 
         # 规范化输出（统一文件名和目录结构）
         normalize_output(output_dir)
 
         # 返回目录路径（与其他引擎保持一致）
-        return {"result_path": str(output_dir), "content": result.text_content}
+        return {"result_path": str(output_dir), "content": markdown_content}
+
+    def _convert_office_to_pdf(self, file_path: str) -> str:
+        """
+        使用 LibreOffice 将 Office 文件转换为 PDF
+
+        Args:
+            file_path: Office 文件路径
+
+        Returns:
+            转换后的 PDF 文件路径
+
+        Raises:
+            RuntimeError: 转换失败时抛出
+        """
+        import subprocess
+        import shutil
+        import tempfile
+        from pathlib import Path
+
+        input_file = Path(file_path)
+        final_output_dir = input_file.parent
+
+        # 最终输出文件名
+        final_pdf_file = final_output_dir / f"{input_file.stem}.pdf"
+
+        # 如果已存在同名 PDF，先删除
+        if final_pdf_file.exists():
+            final_pdf_file.unlink()
+
+        logger.info(f"🔄 Converting Office to PDF: {input_file.name}")
+
+        try:
+            # 使用 /tmp 作为临时目录（避免 Docker 挂载卷写入问题）
+            with tempfile.TemporaryDirectory(prefix="libreoffice_") as temp_dir:
+                temp_dir_path = Path(temp_dir)
+
+                # 复制输入文件到临时目录
+                temp_input = temp_dir_path / input_file.name
+                shutil.copy2(input_file, temp_input)
+
+                # 在临时目录执行转换
+                cmd = [
+                    "libreoffice",
+                    "--headless",  # 无界面模式
+                    "--convert-to",
+                    "pdf",  # 转换为 PDF
+                    "--outdir",
+                    str(temp_dir_path),  # 输出到临时目录
+                    str(temp_input),  # 输入文件
+                ]
+
+                # 执行转换（超时 120 秒）
+                result = subprocess.run(cmd, check=True, timeout=120, capture_output=True, text=True)
+
+                # 临时输出文件路径
+                temp_pdf = temp_dir_path / f"{input_file.stem}.pdf"
+
+                # 验证输出文件是否存在
+                if not temp_pdf.exists():
+                    stderr_output = result.stderr if result.stderr else "No error output"
+                    raise RuntimeError(
+                        f"LibreOffice conversion failed: output file not found: {temp_pdf}\nstderr: {stderr_output}"
+                    )
+
+                # 移动转换后的 PDF 到最终目录
+                shutil.move(str(temp_pdf), str(final_pdf_file))
+
+                logger.info(
+                    f"✅ Office converted to PDF: {final_pdf_file.name} ({final_pdf_file.stat().st_size / 1024:.1f} KB)"
+                )
+
+                return str(final_pdf_file)
+
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"LibreOffice conversion timeout (>120s): {input_file.name}")
+        except subprocess.CalledProcessError as e:
+            stderr_output = e.stderr if e.stderr else "No error output"
+            raise RuntimeError(f"LibreOffice conversion failed: {stderr_output}")
+        except Exception as e:
+            raise RuntimeError(f"Office to PDF conversion error: {e}")
 
     def _process_with_paddleocr_vl(self, file_path: str, options: dict) -> dict:
         """使用 PaddleOCR-VL 处理图片或 PDF"""
+        # 检查加速器类型（PaddleOCR-VL 仅支持 GPU）
+        if self.accelerator == "cpu":
+            raise RuntimeError(
+                "PaddleOCR-VL requires GPU and is not supported in CPU mode. "
+                "Please use 'mineru' or 'markitdown' backend instead."
+            )
+
         # 延迟加载 PaddleOCR-VL（单例模式）
         if self.paddleocr_vl_engine is None:
             from paddleocr_vl import PaddleOCRVLEngine
@@ -763,6 +906,13 @@ class MinerUWorkerAPI(ls.LitAPI):
 
     def _process_with_paddleocr_vl_vllm(self, file_path: str, options: dict) -> dict:
         """使用 PaddleOCR-VL VLLM 处理图片或 PDF"""
+        # 检查加速器类型（PaddleOCR-VL VLLM 仅支持 GPU）
+        if self.accelerator == "cpu":
+            raise RuntimeError(
+                "PaddleOCR-VL VLLM requires GPU and is not supported in CPU mode. "
+                "Please use 'mineru' or 'markitdown' backend instead."
+            )
+
         # 延迟加载 PaddleOCR-VL（单例模式）
         if self.paddleocr_vl_vllm_engine is None:
             from paddleocr_vl_vllm import PaddleOCRVLVLLMEngine
@@ -773,7 +923,7 @@ class MinerUWorkerAPI(ls.LitAPI):
                 device="cuda:0", vllm_api_base=self.paddleocr_vl_vllm_api
             )
             gpu_id = os.environ.get("CUDA_VISIBLE_DEVICES", "?")
-            logger.info(f"✅ PaddleOCR-VL engine loaded on cuda:0 (physical GPU {gpu_id})")
+            logger.info(f"✅ PaddleOCR-VL VLLM engine loaded on cuda:0 (physical GPU {gpu_id})")
 
         # 设置输出目录
         output_dir = Path(self.output_dir) / Path(file_path).stem
@@ -794,11 +944,15 @@ class MinerUWorkerAPI(ls.LitAPI):
         if self.sensevoice_engine is None:
             from audio_engines import SenseVoiceEngine
 
-            # 注意：由于在 setup() 中已设置 CUDA_VISIBLE_DEVICES，
+            # 使用动态设备选择（支持 CPU/CUDA）
+            # 注意：CUDA 模式下已在 setup() 中设置 CUDA_VISIBLE_DEVICES，
             # 该进程只能看到一个 GPU（映射为 cuda:0）
-            self.sensevoice_engine = SenseVoiceEngine(device="cuda:0")
-            gpu_id = os.environ.get("CUDA_VISIBLE_DEVICES", "?")
-            logger.info(f"✅ SenseVoice engine loaded on cuda:0 (physical GPU {gpu_id})")
+            self.sensevoice_engine = SenseVoiceEngine(device=self.engine_device)
+            if self.accelerator == "cuda":
+                gpu_id = os.environ.get("CUDA_VISIBLE_DEVICES", "?")
+                logger.info(f"✅ SenseVoice engine loaded on cuda:0 (physical GPU {gpu_id})")
+            else:
+                logger.info("✅ SenseVoice engine loaded on CPU")
 
         # 设置输出目录
         output_dir = Path(self.output_dir) / Path(file_path).stem
@@ -834,11 +988,15 @@ class MinerUWorkerAPI(ls.LitAPI):
         if self.video_engine is None:
             from video_engines import VideoProcessingEngine
 
-            # 注意：由于在 setup() 中已设置 CUDA_VISIBLE_DEVICES，
+            # 使用动态设备选择（支持 CPU/CUDA）
+            # 注意：CUDA 模式下已在 setup() 中设置 CUDA_VISIBLE_DEVICES，
             # 该进程只能看到一个 GPU（映射为 cuda:0）
-            self.video_engine = VideoProcessingEngine(device="cuda:0")
-            gpu_id = os.environ.get("CUDA_VISIBLE_DEVICES", "?")
-            logger.info(f"✅ Video processing engine loaded on cuda:0 (physical GPU {gpu_id})")
+            self.video_engine = VideoProcessingEngine(device=self.engine_device)
+            if self.accelerator == "cuda":
+                gpu_id = os.environ.get("CUDA_VISIBLE_DEVICES", "?")
+                logger.info(f"✅ Video processing engine loaded on cuda:0 (physical GPU {gpu_id})")
+            else:
+                logger.info("✅ Video processing engine loaded on CPU")
 
         # 创建输出目录（与其他引擎保持一致）
         output_dir = Path(self.output_dir) / Path(file_path).stem
@@ -1080,7 +1238,7 @@ class MinerUWorkerAPI(ls.LitAPI):
                     markdown_parts.append(content)
 
                     logger.info(
-                        f"   ✅ Merged chunk {idx+1}/{len(children)}: "
+                        f"   ✅ Merged chunk {idx + 1}/{len(children)}: "
                         f"pages {chunk_info.get('start_page', '?')}-{chunk_info.get('end_page', '?')}"
                     )
 
@@ -1107,7 +1265,7 @@ class MinerUWorkerAPI(ls.LitAPI):
                                     page["page_number"] += page_offset
                                 json_pages.append(page)
                     except Exception as json_e:
-                        logger.warning(f"⚠️  Failed to merge JSON for chunk {idx+1}: {json_e}")
+                        logger.warning(f"⚠️  Failed to merge JSON for chunk {idx + 1}: {json_e}")
 
             # 保存合并后的 Markdown
             merged_md = "".join(markdown_parts)
@@ -1529,7 +1687,7 @@ if __name__ == "__main__":
     if devices == "auto":
         # 首先尝试从环境变量 CUDA_VISIBLE_DEVICES 读取（如果用户明确设置了）
         env_devices = os.getenv("CUDA_VISIBLE_DEVICES")
-        if env_devices:
+        if env_devices and env_devices.strip():
             devices = env_devices
             logger.info(f"📊 Using devices from CUDA_VISIBLE_DEVICES: {devices}")
         else:

@@ -407,7 +407,11 @@ class RedisTaskQueue:
 
 
 # 全局队列实例（延迟初始化）
-_queue_instance: Optional[RedisTaskQueue] = None
+# 使用特殊值 False 表示"已检查,确认禁用",避免重复检查和日志
+# None: 未初始化
+# False: 已确认禁用
+# RedisTaskQueue: 已初始化的队列实例
+_queue_instance: Optional[RedisTaskQueue] | bool | None = None
 
 
 def get_redis_queue() -> Optional[RedisTaskQueue]:
@@ -424,10 +428,16 @@ def get_redis_queue() -> Optional[RedisTaskQueue]:
     if not REDIS_AVAILABLE:
         return None
 
+    # 如果已经确认禁用（_queue_instance == False），直接返回 None
+    if _queue_instance is False:
+        return None
+
     if _queue_instance is None:
         # 检查是否启用 Redis 队列
         if os.getenv("REDIS_QUEUE_ENABLED", "false").lower() != "true":
             logger.info("ℹ️  Redis queue disabled (REDIS_QUEUE_ENABLED != true)")
+            # 设置为 False 表示已检查且确认禁用，下次调用直接返回
+            _queue_instance = False
             return None
 
         try:
@@ -438,12 +448,13 @@ def get_redis_queue() -> Optional[RedisTaskQueue]:
                 )
             else:
                 logger.warning("⚠️  Redis queue not available, falling back to SQLite")
-                _queue_instance = None
+                _queue_instance = False  # 标记为已检查且不可用
         except Exception as e:
             logger.error(f"❌ Failed to initialize Redis queue: {e}")
-            _queue_instance = None
+            _queue_instance = False  # 标记为已检查且初始化失败
 
-    return _queue_instance
+    # 返回实例（可能是 RedisTaskQueue 或 None）
+    return _queue_instance if isinstance(_queue_instance, RedisTaskQueue) else None
 
 
 if __name__ == "__main__":

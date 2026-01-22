@@ -1,10 +1,15 @@
-# 企业级 AI 数据预处理平台 - 支持 GPU 加速的多模态文档处理服务
+# 企业级 AI 数据预处理平台 - 离线构建版本
 #
 # 构建方式:
-#   docker build -t tianshu-backend:latest -f backend/Dockerfile .
+#   docker build -t tianshu-backend:latest -f backend/Dockerfile.offline .
 #
 # 运行方式:
 #   docker run --gpus all -p 8000:8000 tianshu-backend:latest
+#
+# 说明:
+#   - 此 Dockerfile 用于离线环境构建
+#   - 使用本地 pip 缓存和模型文件
+#   - 不依赖网络下载
 
 # ============================================================================
 # Stage 1: Base Image with CUDA Support
@@ -42,10 +47,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pandoc \
     && rm -rf /var/lib/apt/lists/*
 
-# 安装 LibreOffice (固定大版本,确保构建可重现)
+# 安装 LibreOffice 和中文字体 (固定大版本,确保构建可重现)
 # Ubuntu 24.04 默认提供 LibreOffice 24.8.x
 # 固定到 24.8.x 系列,避免大版本升级带来的不兼容
-# 同时安装中文字体以支持中文文档转换
 RUN apt-get update && \
     echo "Available LibreOffice versions:" && \
     apt-cache policy libreoffice | head -20 && \

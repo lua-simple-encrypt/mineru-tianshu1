@@ -1,23 +1,32 @@
-# Tianshu (天枢) - Production Docker Compose
-# 企业级 AI 数据预处理平台完整编排
+# Tianshu (天枢) - Offline Docker Compose
+# 企业级 AI 数据预处理平台 - 离线部署配置
 #
 # 使用方式:
 #   1. 复制 .env.example 为 .env 并配置
-#   2. 启动服务:
-#      - 不启用 Redis（默认）: docker-compose up -d
-#      - 启用 Redis: docker-compose --profile redis up -d
-#   3. 查看日志: docker-compose logs -f
-#   4. 停止: docker-compose down
+#   2. 确保已加载所有 Docker 镜像:
+#      - tianshu-backend:latest
+#      - tianshu-frontend:latest
+#      - rustfs/rustfs:latest
+#      - redis:7-alpine (可选)
+#   3. 确保已解压模型文件到 ./models-offline 目录
+#   4. 启动服务:
+#      - 不启用 Redis(默认): docker-compose -f docker-compose.offline.yml up -d
+#      - 启用 Redis: docker-compose -f docker-compose.offline.yml --profile redis up -d
+#   5. 查看日志: docker-compose -f docker-compose.offline.yml logs -f
+#   6. 停止: docker-compose -f docker-compose.offline.yml down
 #
 # Redis 说明:
 #   - Redis 是可选的高性能任务队列，默认不启动
-#   - 不启用时使用 SQLite 队列（适合小规模部署）
+#   - 不启用时使用 SQLite 队列(适合小规模部署)
 #   - 启用时需在 .env 设置 REDIS_QUEUE_ENABLED=true
 #
 # 前置要求:
 #   - Docker 20.10+
 #   - Docker Compose 2.0+
-#   - NVIDIA Container Toolkit (GPU 支持)
+#   - NVIDIA GPU + NVIDIA Driver 525+
+#   - NVIDIA Container Toolkit
+#   - 推荐 32GB+ 内存
+#   - 推荐 16+ CPU 核心
 
 # 项目名称（避免使用目录名）
 name: tianshu
@@ -86,36 +95,34 @@ services:
       - tianshu-network
 
   # ============================================================================
-  # Backend API Server
+  # Backend API Server (Offline)
   # ============================================================================
   backend:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-      # 启用 BuildKit 缓存挂载（需要 DOCKER_BUILDKIT=1 环境变量）
-      cache_from:
-        - tianshu-backend:latest
     image: tianshu-backend:latest
     container_name: tianshu-backend
     restart: unless-stopped
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
-      # 模型存储（持久化）
+      # 模型外部卷(只读)
+      - ./models-offline:/models-external:ro
+      # 容器内模型缓存(读写)
+      - backend-models-cache:/root/.cache:rw
+      - backend-paddleocr-cache:/root/.paddleocr:rw
       - ./models:/app/models:rw
-      # PaddleOCR 模型缓存（持久化，避免重复下载）
+      # PaddleOCR 模型缓存(持久化，避免重复下载)
       - ./models/paddlex_cache:/root/.paddlex:rw
-      # Hugging Face 模型缓存（持久化）
+      # Hugging Face 模型缓存(持久化)
       - ./models/huggingface_cache:/root/.cache/huggingface:rw
-      # ModelScope 模型缓存（持久化，国内模型下载）
+      # ModelScope 模型缓存(持久化，国内模型下载)
       - ./models/modelscope_cache:/root/.cache/modelscope:rw
-      # 上传文件（统一使用 /app/data 路径）
+      # 上传文件(统一使用 /app/data 路径)
       - ./data/uploads:/app/data/uploads:rw
       # 输出结果
       - ./data/output:/app/data/output:rw
       # 日志
       - ./logs/backend:/app/logs:rw
-      # 数据库（只挂载数据库文件，不要覆盖整个 backend 目录）
+      # 数据库
       - ./data/db:/app/data/db:rw
       # 时区配置
       - /etc/localtime:/etc/localtime:ro
@@ -163,8 +170,9 @@ services:
       # RUSTFS_PUBLIC_URL: 必须设置为外部可访问的完整 URL
       - RUSTFS_PUBLIC_URL=${RUSTFS_PUBLIC_URL}
 
-      # 模型下载配置
-      - MODEL_DOWNLOAD_SOURCE=${MODEL_DOWNLOAD_SOURCE:-auto}
+      # 模型下载配置(离线模式)
+      - MODEL_DOWNLOAD_SOURCE=${MODEL_DOWNLOAD_SOURCE:-local}
+      - HF_OFFLINE=1
       - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
       - HF_TOKEN=${HF_TOKEN:-}
 
@@ -195,15 +203,9 @@ services:
       # redis 是可选依赖，不在 depends_on 中强制依赖
 
   # ============================================================================
-  # LitServe GPU Worker
+  # LitServe Worker (Offline)
   # ============================================================================
   worker:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-      # 启用 BuildKit 缓存挂载（需要 DOCKER_BUILDKIT=1 环境变量）
-      cache_from:
-        - tianshu-backend:latest
     image: tianshu-backend:latest
     container_name: tianshu-worker
     restart: unless-stopped
@@ -211,21 +213,25 @@ services:
     ports:
       - "${WORKER_PORT:-8001}:8001"
     volumes:
-      # 模型存储（读写，因为 SenseVoice 等引擎需要创建缓存目录和下载模型）
+      # 模型外部卷(只读)
+      - ./models-offline:/models-external:ro
+      # 容器内模型缓存(读写)
+      - worker-models-cache:/root/.cache:rw
+      - worker-paddleocr-cache:/root/.paddleocr:rw
       - ./models:/app/models:rw
-      # PaddleOCR 模型缓存（持久化，避免重复下载）
+      # PaddleOCR 模型缓存(持久化，避免重复下载)
       - ./models/paddlex_cache:/root/.paddlex:rw
-      # Hugging Face 模型缓存（持久化）
+      # Hugging Face 模型缓存(持久化)
       - ./models/huggingface_cache:/root/.cache/huggingface:rw
-      # ModelScope 模型缓存（持久化，国内模型下载）
+      # ModelScope 模型缓存(持久化，国内模型下载)
       - ./models/modelscope_cache:/root/.cache/modelscope:rw
-      # 上传文件（读写 - Office 转 PDF 功能需要写入转换后的 PDF，统一使用 /app/data 路径）
+      # 上传文件(读写，需要创建 converted_pdfs 目录用于 Office 转 PDF)
       - ./data/uploads:/app/data/uploads:rw
       # 输出结果
       - ./data/output:/app/data/output:rw
       # 日志
       - ./logs/worker:/app/logs:rw
-      # 数据库（读写，需要更新任务状态）
+      # 数据库(读写，需要更新任务状态)
       - ./data/db:/app/data/db:rw
       # 时区配置
       - /etc/localtime:/etc/localtime:ro
@@ -255,18 +261,18 @@ services:
       - MAX_BATCH_SIZE=${MAX_BATCH_SIZE:-4}
       - TIMEOUT=${WORKER_TIMEOUT:-300}
 
-      # 模型下载配置
-      - MODEL_DOWNLOAD_SOURCE=${MODEL_DOWNLOAD_SOURCE:-auto}
+      # 模型下载配置(离线模式)
+      - MODEL_DOWNLOAD_SOURCE=local
+      - HF_OFFLINE=1
       - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
       - HF_TOKEN=${HF_TOKEN:-}
 
-      # PDF 拆分配置（Worker 中执行）
+      # PDF 拆分配置(Worker 中执行)
       - PDF_SPLIT_ENABLED=${PDF_SPLIT_ENABLED:-true}
       - PDF_SPLIT_THRESHOLD_PAGES=${PDF_SPLIT_THRESHOLD_PAGES:-500}
-      - PDF_SPLIT_CHUNK_SIZE=${PDF_SPLIT_CHUNK_SIZE:-500}
+      - PDF_SPLIT_CHUNK_SIZE=${PDF_SPLIT_CHUNK_SIZE:-250}
 
       # RustFS 对象存储配置
-      - RUSTFS_ENABLED=${RUSTFS_ENABLED:-true}
       - RUSTFS_ENDPOINT=${RUSTFS_ENDPOINT:-rustfs:9000}
       - RUSTFS_ACCESS_KEY=${RUSTFS_ACCESS_KEY:-rustfsadmin}
       - RUSTFS_SECRET_KEY=${RUSTFS_SECRET_KEY:-rustfsadmin}
@@ -281,18 +287,18 @@ services:
       - REDIS_PORT=${REDIS_PORT:-6379}
       - REDIS_DB=${REDIS_DB:-0}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
-    # 内存限制（兼容旧版 docker-compose）
-    mem_limit: ${WORKER_MEMORY_LIMIT:-16G}
-    memswap_limit: ${WORKER_MEMORY_LIMIT:-16G}
-    mem_reservation: ${WORKER_MEMORY_RESERVATION:-8G}
+    # 内存限制(根据服务器配置调整)
+    mem_limit: ${WORKER_MEMORY_LIMIT:-32G}
+    memswap_limit: ${WORKER_MEMORY_LIMIT:-32G}
+    mem_reservation: ${WORKER_MEMORY_RESERVATION:-16G}
     deploy:
       resources:
         limits:
-          # 内存硬限制（Docker Compose v2 / Swarm 模式）
-          memory: ${WORKER_MEMORY_LIMIT:-16G}
+          # 内存硬限制
+          memory: ${WORKER_MEMORY_LIMIT:-32G}
         reservations:
-          # 内存软限制（Docker Compose v2 / Swarm 模式）
-          memory: ${WORKER_MEMORY_RESERVATION:-8G}
+          # 内存软限制
+          memory: ${WORKER_MEMORY_RESERVATION:-16G}
           devices:
             - driver: nvidia
               count: ${GPU_COUNT:-1}
@@ -310,15 +316,9 @@ services:
       # redis 是可选依赖，不在 depends_on 中强制依赖
 
   # ============================================================================
-  # MCP Server (Model Context Protocol)
+  # MCP Server (Model Context Protocol) - Offline
   # ============================================================================
   mcp-server:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-      # 启用 BuildKit 缓存挂载（需要 DOCKER_BUILDKIT=1 环境变量）
-      cache_from:
-        - tianshu-backend:latest
     image: tianshu-backend:latest
     container_name: tianshu-mcp
     restart: unless-stopped
@@ -352,15 +352,9 @@ services:
       - backend
 
   # ============================================================================
-  # Frontend (Vue 3 + Nginx)
+  # Frontend (Vue 3 + Nginx) - Offline
   # ============================================================================
   frontend:
-    build:
-      context: .
-      dockerfile: frontend/Dockerfile
-      # 启用 BuildKit 缓存挂载（需要 DOCKER_BUILDKIT=1 环境变量）
-      cache_from:
-        - tianshu-frontend:latest
     image: tianshu-frontend:latest
     container_name: tianshu-frontend
     restart: unless-stopped
@@ -374,7 +368,7 @@ services:
       # 时区设置
       - TZ=Asia/Shanghai
       - VITE_API_BASE_URL=${VITE_API_BASE_URL:-http://localhost:8000}
-      # Nginx 文件上传大小限制（0 表示不限制）
+      # Nginx 文件上传大小限制(0 表示不限制)
       - NGINX_CLIENT_MAX_BODY_SIZE=${NGINX_CLIENT_MAX_BODY_SIZE:-0}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost/"]
@@ -394,21 +388,27 @@ networks:
     ipam:
       driver: default
       config:
-        - subnet: 172.28.0.0/16
-          gateway: 172.28.0.1
+        - subnet: 172.30.0.0/16
+          gateway: 172.30.0.1
 
 volumes:
-  models:
+  # 模型缓存卷(分开以避免权限问题)
+  backend-models-cache:
     driver: local
-  uploads:
+    name: tianshu-backend-models
+  backend-paddleocr-cache:
     driver: local
-  output:
+    name: tianshu-backend-paddleocr
+  worker-models-cache:
     driver: local
-  logs:
+    name: tianshu-worker-models
+  worker-paddleocr-cache:
     driver: local
+    name: tianshu-worker-paddleocr
   redis-data:
     driver: local
     name: tianshu-redis-data
+  # RustFS 数据卷
   rustfs-data:
     driver: local
     name: tianshu-rustfs-data

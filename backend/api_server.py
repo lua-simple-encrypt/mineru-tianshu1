@@ -206,6 +206,11 @@ async def submit_task(
     remove_watermark: bool = Form(False, description="是否启用水印去除（支持 PDF/图片）"),
     watermark_conf_threshold: float = Form(0.35, description="水印检测置信度阈值（0.0-1.0，推荐 0.35）"),
     watermark_dilation: int = Form(10, description="水印掩码膨胀大小（像素，推荐 10）"),
+    # Office 文件转 PDF 参数
+    convert_office_to_pdf: bool = Form(
+        False,
+        description="是否将 Office 文件转换为 PDF 后再处理（图片提取更完整，但速度较慢）"
+    ),
     # 认证依赖
     current_user: User = Depends(require_permission(Permission.TASK_SUBMIT)),
 ):
@@ -255,6 +260,8 @@ async def submit_task(
             "remove_watermark": remove_watermark,
             "watermark_conf_threshold": watermark_conf_threshold,
             "watermark_dilation": watermark_dilation,
+            # Office 转 PDF 参数
+            "convert_office_to_pdf": convert_office_to_pdf,
         }
 
         # 创建任务（PDF 拆分逻辑由 Worker 处理）
@@ -645,11 +652,21 @@ async def list_engines():
         "format": [],
         "office": [
             {
-                "name": "markitdown",
-                "display_name": "MarkItDown",
-                "description": "Office 文档和文本文件转换引擎",
+                "name": "MarkItDown (快速)",
+                "value": "auto",
+                "description": "Office 文档和文本文件转换引擎（快速但图片提取可能不完整）",
                 "supported_formats": [".docx", ".xlsx", ".pptx", ".doc", ".xls", ".ppt", ".html", ".txt", ".csv"],
+                "features": ["文本提取", "基础格式保留", "图片提取（DOCX）"],
+                "note": "推荐启用 convert_office_to_pdf 参数以获得更好的图片提取效果"
             },
+            {
+                "name": "LibreOffice + MinerU (完整)",
+                "value": "auto",
+                "description": "将 Office 文件转为 PDF 后使用 MinerU 处理（慢但图片提取完整）",
+                "supported_formats": [".docx", ".xlsx", ".pptx", ".doc", ".xls", ".ppt"],
+                "features": ["完整格式保留", "完整图片提取", "表格识别", "公式识别"],
+                "requirement": "需要设置 convert_office_to_pdf=true"
+            }
         ],
     }
 
