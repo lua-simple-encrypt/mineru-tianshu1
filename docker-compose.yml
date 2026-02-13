@@ -4,9 +4,10 @@
 name: tianshu
 
 services:
-  # ============================================================================
-  # Redis (高性能任务队列 - 可选)
-  # ============================================================================
+  # ... (Redis, RustFS, Init-Models, Backend 保持不变，省略以节省篇幅) ...
+  # (请保留您原文件中的 redis, rustfs, init-models, backend, mcp-server, frontend 部分)
+  # 这里仅展示修改的部分：vllm 服务和 worker
+
   redis:
     image: redis:7-alpine
     container_name: tianshu-redis
@@ -31,9 +32,6 @@ services:
     networks:
       - tianshu-network
 
-  # ============================================================================
-  # RustFS Object Storage (S3 Compatible)
-  # ============================================================================
   rustfs:
     image: rustfs/rustfs:latest
     container_name: tianshu-rustfs
@@ -59,19 +57,12 @@ services:
     networks:
       - tianshu-network
 
-  # ============================================================================
-  # Model Initializer (自动下载模型)
-  # ============================================================================
   init-models:
     image: tianshu-backend:latest
     container_name: tianshu-init-models
-    # 覆盖入口点，直接运行下载脚本
     entrypoint: ["python", "download_models.py", "--output", "/app/models"]
     volumes:
-      # 挂载模型目录 (RW)
       - ./models:/app/models:rw
-      # 挂载配置文件 (RW)，以便脚本生成 magic-pdf.json
-      # 注意：请确保宿主机上已存在 magic-pdf.json 文件（哪怕是空的），否则 Docker 会创建为目录
       - ./magic-pdf.json:/app/magic-pdf.json:rw
       - /etc/localtime:/etc/localtime:ro
     environment:
@@ -81,9 +72,6 @@ services:
     networks:
       - tianshu-network
 
-  # ============================================================================
-  # Backend API Server (【唯一】负责构建镜像的服务)
-  # ============================================================================
   backend:
     build:
       context: .
@@ -155,23 +143,21 @@ services:
       - init-models
 
   # ============================================================================
-  # vLLM Service - PaddleOCR Fix (PaddleOCR-VL-1.5)
-  # ⚠️ 手动模式：Worker 将按需启动此服务
+  # vLLM Service - PaddleOCR (默认启动)
+  # 优化：显存占用 0.7 (约16.8GB)，留出空间给 Worker
   # ============================================================================
   vllm-paddleocr:
     image: vllm/vllm-openai:nightly
     container_name: tianshu-vllm-paddleocr
-    restart: no # 不自动重启，由程序控制
-    profiles: ["manual"] # 手动模式，默认不启动
+    restart: unless-stopped  # ✅ 默认随系统启动
+    # profiles: ["manual"]  # ❌ 移除 Manual Profile，使其自动启动
     ports:
       - "30023:30023"
     volumes:
-      # 挂载宿主机 models 目录到容器 /models
       - ./models:/models:ro
       - /etc/localtime:/etc/localtime:ro
     environment:
       - TZ=Asia/Shanghai
-      # 可以通过环境变量控制显卡，例如 CUDA_VISIBLE_DEVICES=0
       - CUDA_VISIBLE_DEVICES=${VLLM_PADDLE_DEVICE:-0}
     command: >
       --model /models/PaddleOCR-VL-1.5
@@ -179,10 +165,9 @@ services:
       --trust-remote-code
       --host 0.0.0.0
       --port 30023
-      --gpu-memory-utilization 0.6
+      --gpu-memory-utilization 0.7
       --max-model-len 16384
       --enforce-eager
-    # vLLM 需要较大的共享内存
     shm_size: 32gb
     deploy:
       resources:
@@ -195,23 +180,21 @@ services:
       - tianshu-network
 
   # ============================================================================
-  # vLLM Service - MinerU (MinerU-1.2B)
-  # ⚠️ 手动模式：Worker 将按需启动此服务
+  # vLLM Service - MinerU (按需启动)
+  # 优化：显存占用 0.7，与 PaddleOCR 互斥运行
   # ============================================================================
   vllm-mineru:
     image: vllm/vllm-openai:nightly
     container_name: tianshu-vllm-mineru
-    restart: no # 不自动重启
-    profiles: ["manual"] # 手动模式，默认不启动
+    restart: no
+    profiles: ["manual"] # ✅ 保持 Manual，默认不启动
     ports:
       - "30024:30024"
     volumes:
-      # 挂载宿主机 models 目录到容器 /models
       - ./models:/models:ro
       - /etc/localtime:/etc/localtime:ro
     environment:
       - TZ=Asia/Shanghai
-      # 可以通过环境变量控制显卡，例如 CUDA_VISIBLE_DEVICES=0
       - CUDA_VISIBLE_DEVICES=${VLLM_MINERU_DEVICE:-0}
     command: >
       --model /models/MinerU2.5-2509-1.2B
@@ -219,10 +202,9 @@ services:
       --trust-remote-code
       --host 0.0.0.0
       --port 30024
-      --gpu-memory-utilization 0.6
+      --gpu-memory-utilization 0.7
       --max-model-len 8192
       --enforce-eager
-    # vLLM 需要较大的共享内存
     shm_size: 32gb
     deploy:
       resources:
@@ -235,13 +217,11 @@ services:
       - tianshu-network
 
   # ============================================================================
-  # LitServe GPU Worker (复用 Backend 镜像)
-  # ⚠️ 核心：使用 root 权限并挂载 docker.sock 以实现容器管理
+  # Worker (Root权限 + Docker Socket)
   # ============================================================================
   worker:
     image: tianshu-backend:latest
     container_name: tianshu-worker
-    # ⚠️ 关键：使用 root 用户运行以确保能访问 /var/run/docker.sock
     user: root
     restart: unless-stopped
     command: [
@@ -255,7 +235,6 @@ services:
     ports:
       - "${WORKER_PORT:-8001}:8001"
     volumes:
-      # ⚠️ 关键：挂载 Docker Socket，允许 Worker 控制兄弟容器（启动/停止 vLLM）
       - /var/run/docker.sock:/var/run/docker.sock
       - ./models:/app/models:rw
       - ./magic-pdf.json:/root/magic-pdf.json:ro
@@ -319,10 +298,8 @@ services:
     depends_on:
       - rustfs
       - backend
+      - init-models # 确保模型已下载
 
-  # ============================================================================
-  # MCP Server (复用 Backend 镜像)
-  # ============================================================================
   mcp-server:
     image: tianshu-backend:latest
     container_name: tianshu-mcp
@@ -352,9 +329,6 @@ services:
     depends_on:
       - backend
 
-  # ============================================================================
-  # Frontend (Vue 3 + Nginx)
-  # ============================================================================
   frontend:
     build:
       context: .
