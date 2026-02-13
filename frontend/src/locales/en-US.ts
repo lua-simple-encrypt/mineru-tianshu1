@@ -161,7 +161,12 @@ export default {
     // Backend options
     backendAuto: '🎯 Auto Select (Recommended, automatically selects the best engine based on file type)',
     backendAutoHint: '🎯 Auto Select: The system will intelligently select the most suitable engine based on file extension',
-    backendPipeline: 'MinerU Pipeline (Complete parsing)',
+    backendPipeline: 'MinerU Pipeline (Standard)',
+    backendPipelineHint: '🚀 Fast, hallucination-free, suitable for standard documents',
+    backendVLMAuto: 'MinerU VLM Auto (Vision Model)',
+    backendVLMAutoHint: '👁️ Based on MinerU 2.5, great for complex layouts and charts',
+    backendHybridAuto: 'MinerU Hybrid (High Precision)',
+    backendHybridAutoHint: '⚖️ Combines Pipeline and VLM for highest accuracy',
     backendPaddleOCR: 'PaddleOCR-VL (Multilingual OCR, 109+ languages)',
     backendPaddleOCRHint: '🌏 PaddleOCR-VL: Automatic multilingual recognition, supports document orientation correction, text correction, layout detection',
     backendPaddleOCRVLLM: 'PaddleOCR-VL-VLLM (High-performance multilingual OCR)',
