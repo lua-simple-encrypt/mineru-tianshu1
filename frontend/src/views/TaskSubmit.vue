@@ -72,7 +72,7 @@
                  :key="preset.id"
                  @click="applyPreset(preset)"
                  :class="['p-2 rounded-lg border text-left transition-all relative overflow-hidden group', 
-                          currentPreset === preset.id ? 'border-primary-500 bg-primary-50 ring-1 ring-primary-500' : 'border-gray-200 hover:border-primary-300 hover:bg-gray-50']"
+                           currentPreset === preset.id ? 'border-primary-500 bg-primary-50 ring-1 ring-primary-500' : 'border-gray-200 hover:border-primary-300 hover:bg-gray-50']"
                >
                  <div class="text-xl mb-1">{{ preset.icon }}</div>
                  <div class="text-xs font-bold text-gray-800">{{ preset.name }}</div>
@@ -87,28 +87,34 @@
 
             <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div class="col-span-1 md:col-span-2">
-                <label class="block text-sm font-bold text-gray-800 mb-1.5">解析后端 (Backend Engine)</label>
+                <label class="block text-sm font-bold text-gray-800 mb-1.5">{{ $t('task.backend') }}</label>
                 <div class="relative">
                   <select
                     v-model="config.backend"
                     @change="onBackendChange"
                     class="w-full pl-3 pr-8 py-3 bg-white border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 transition-colors text-sm font-medium shadow-sm"
                   >
-                    <option value="auto">Auto (自动选择)</option>
-                    <optgroup label="MinerU Documents">
-                      <option value="vlm-auto-engine">MinerU VLM (多模态大模型高精度)</option>
-                      <option value="hybrid-auto-engine">MinerU Hybrid (高精度混合解析)</option>
-                      <option value="pipeline">Standard Pipeline (通用管道)</option>
+                    <option value="auto">{{ $t('task.backendAuto') }}</option>
+                    
+                    <optgroup :label="$t('task.groupMinerU')">
+                      <option value="pipeline">{{ $t('task.backendPipeline') }}</option>
+                      <option value="vlm-auto-engine">{{ $t('task.backendVlmAutoEngine') }}</option>
+                      <option value="hybrid-auto-engine">{{ $t('task.backendHybridAutoEngine') }}</option>
                     </optgroup>
-                    <optgroup label="Audio / Video / OCR">
-                      <option value="paddleocr-vl">PaddleOCR-VL</option>
-                      <option value="paddleocr-vl-vllm">PaddleOCR-VL-VLLM</option>
-                      <option value="sensevoice">SenseVoice (Audio)</option>
-                      <option value="video">Video Processing</option>
+                    
+                    <optgroup :label="$t('task.groupPaddleOCR')">
+                      <option value="paddleocr-vl">{{ $t('task.backendPaddleOcrVl1509b') }}</option>
+                      <option value="paddleocr-vl-vllm">{{ $t('task.backendPaddleOCRVLLM') }}</option>
                     </optgroup>
-                    <optgroup label="Professional Formats">
-                      <option value="fasta">FASTA</option>
-                      <option value="genbank">GenBank</option>
+                    
+                    <optgroup :label="$t('task.groupAudioVideo')">
+                      <option value="sensevoice">{{ $t('task.backendSenseVoice') }}</option>
+                      <option value="video">{{ $t('task.backendVideo') }}</option>
+                    </optgroup>
+                    
+                    <optgroup :label="$t('task.groupProfessional')">
+                      <option value="fasta">{{ $t('task.backendFasta') }}</option>
+                      <option value="genbank">{{ $t('task.backendGenBank') }}</option>
                     </optgroup>
                   </select>
                   <div class="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
@@ -117,18 +123,16 @@
                 </div>
                 <p class="mt-2 text-xs text-gray-600 bg-gray-50 p-2 rounded border border-gray-100 flex items-start">
                   <Info class="w-3.5 h-3.5 mr-1.5 mt-0.5 text-primary-500 flex-shrink-0" />
-                  {{ backendDescription }}
+                  {{ currentBackendHint }}
                 </p>
               </div>
 
               <div v-if="showLanguageOption" class="col-span-1">
                 <label class="block text-sm font-medium text-gray-700 mb-1.5">{{ $t('task.language') }}</label>
                 <select v-model="config.lang" class="w-full px-3 py-2.5 bg-white border border-gray-300 rounded-lg text-sm">
-                  <option value="auto">{{ $t('task.langAuto') }}</option>
-                  <option value="ch">{{ $t('task.langChinese') }}</option>
-                  <option value="en">{{ $t('task.langEnglish') }}</option>
-                  <option value="korean">{{ $t('task.langKorean') }}</option>
-                  <option value="japan">{{ $t('task.langJapanese') }}</option>
+                   <option v-for="langOption in availableLanguages" :key="langOption.value" :value="langOption.value">
+                     {{ langOption.label }}
+                   </option>
                 </select>
               </div>
 
@@ -383,21 +387,82 @@ function applyPreset(preset: any) {
 // 计算属性
 const isMinerUBackend = computed(() => ['pipeline', 'vlm-auto-engine', 'hybrid-auto-engine'].includes(config.backend))
 const showLanguageOption = computed(() => isMinerUBackend.value || ['paddleocr-vl', 'paddleocr-vl-vllm', 'sensevoice', 'auto'].includes(config.backend))
-const backendDescription = computed(() => {
+
+// 动态 Hint
+const currentBackendHint = computed(() => {
   const map: Record<string, string> = {
-    'vlm-auto-engine': '多模态大模型高精度解析，仅支持中英文文档。擅长复杂排版。',
-    'hybrid-auto-engine': '高精度混合解析，支持多语言。结合规则与模型，精度最高。',
-    'pipeline': '传统多模型管道解析，支持多语言，无幻觉，速度较快。',
-    'auto': '自动根据文件类型选择最合适的解析引擎。',
-    'paddleocr-vl': '纯 OCR 模式，适合简单图片提取文字。',
+    'auto': t('task.backendAutoHint'),
+    'pipeline': t('task.backendPipelineHint'),
+    'vlm-auto-engine': t('task.backendVlmAutoEngineHint'),
+    'hybrid-auto-engine': t('task.backendHybridAutoEngineHint'),
+    'paddleocr-vl': t('task.backendPaddleOcrVl09bHint'), // 修正key名
+    'paddleocr-vl-vllm': t('task.backendPaddleOCRVLLMHint'),
+    'sensevoice': t('task.backendSenseVoiceHint'),
+    'video': '视频处理：提取关键帧并识别文字，同时分离音频进行语音识别。',
+    'fasta': 'FASTA: 解析生物序列文件。',
+    'genbank': 'GenBank: 解析基因序列注释文件。'
   }
-  return map[config.backend] || '通用处理引擎'
+  return map[config.backend] || ''
 })
+
+const backendDescription = computed(() => {
+  // 这里其实不需要了，因为被 currentBackendHint 取代了，或者可以保留作为 select 下方的通用说明
+  return currentBackendHint.value;
+})
+
 const formulaLabel = computed(() => config.backend === 'vlm-auto-engine' ? '启用行间公式识别' : (config.backend === 'hybrid-auto-engine' ? '启用行内公式识别' : '启用公式识别'))
 const formulaDescription = computed(() => config.backend === 'vlm-auto-engine' ? '行间公式将显示为图片' : (config.backend === 'hybrid-auto-engine' ? '行内公式将不会被检测或解析' : '公式将不会被特殊处理'))
 
+// 动态语言列表
+const availableLanguages = computed(() => {
+  const commonLangs = [
+    { value: 'auto', label: t('task.langAuto') },
+    { value: 'ch', label: t('task.langChinese') },
+    { value: 'en', label: t('task.langEnglish') }
+  ]
+  
+  // VLM 仅支持中英
+  if (config.backend === 'vlm-auto-engine') {
+    return [
+       { value: 'ch', label: t('task.langChinese') },
+       { value: 'en', label: t('task.langEnglish') }
+    ]
+  }
+  
+  // Pipeline / Hybrid 支持更多语言
+  if (['pipeline', 'hybrid-auto-engine'].includes(config.backend)) {
+    return [
+      ...commonLangs,
+      { value: 'korean', label: t('task.langKorean') },
+      { value: 'japan', label: t('task.langJapanese') },
+      { value: 'chinese_cht', label: t('task.langTraditional') },
+      { value: 'ch_server', label: t('task.langChineseServer') },
+      { value: 'ch_lite', label: t('task.langChineseLite') },
+      { value: 'th', label: 'Thai (泰语)' },
+      { value: 'vi', label: 'Vietnamese (越南语)' },
+      { value: 'ru', label: 'Russian (俄语)' },
+      { value: 'ar', label: 'Arabic (阿拉伯语)' },
+      { value: 'fr', label: 'French (法语)' },
+      { value: 'de', label: 'German (德语)' }
+    ]
+  }
+
+  // 默认返回通用语言
+  return commonLangs
+})
+
 function onFilesChange(newFiles: File[]) { files.value = newFiles }
-function onBackendChange() { currentPreset.value = 'custom'; if (config.backend === 'vlm-auto-engine') config.lang = 'ch' }
+
+function onBackendChange() { 
+  currentPreset.value = 'custom'; 
+  
+  // 如果切换到 VLM，强制重置语言为中文或英文
+  if (config.backend === 'vlm-auto-engine') {
+     if (!['ch', 'en'].includes(config.lang)) {
+        config.lang = 'ch' 
+     }
+  }
+}
 
 onMounted(() => {
   const saved = localStorage.getItem('task_submit_config')
@@ -407,6 +472,17 @@ onMounted(() => {
 watch(() => config, () => { localStorage.setItem('task_submit_config', JSON.stringify(config)) }, { deep: true })
 
 function resetConfig() { Object.assign(config, defaultConfig); localStorage.removeItem('task_submit_config'); currentPreset.value = 'default' }
+
+function resetForm() {
+    files.value = [];
+    if (fileUploader.value) {
+        // 假设 FileUploader 组件有 reset 方法，如果没有则需要实现或通过 ref 操作
+        // (fileUploader.value as any).files = []; 
+    }
+    submitProgress.value = [];
+    submitting.value = false;
+    errorMessage.value = '';
+}
 
 async function submitTasks() {
   if (files.value.length === 0) { errorMessage.value = t('task.pleaseSelectFile'); return }
