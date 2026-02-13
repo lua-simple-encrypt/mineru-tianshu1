@@ -192,6 +192,13 @@ async def submit_task(
     method: str = Form("auto", description="解析方法: auto/txt/ocr"),
     formula_enable: bool = Form(True, description="是否启用公式识别"),
     table_enable: bool = Form(True, description="是否启用表格识别"),
+    
+    # === 新增参数 ===
+    start_page: Optional[int] = Form(None, description="起始页码（从0开始）"),
+    end_page: Optional[int] = Form(None, description="结束页码"),
+    force_ocr: bool = Form(False, description="是否强制使用OCR"),
+    # ==============
+
     # 新增 MinerU 高级选项
     draw_layout: bool = Form(True, description="是否绘制布局边框（PDF调试）"),
     draw_span: bool = Form(True, description="是否绘制文本Span边框（PDF调试）"),
@@ -253,6 +260,13 @@ async def submit_task(
             "method": method,
             "formula_enable": formula_enable,
             "table_enable": table_enable,
+            
+            # === 新增参数传入 options ===
+            "start_page": start_page,
+            "end_page": end_page,
+            "force_ocr": force_ocr,
+            # ==========================
+            
             "draw_layout": draw_layout,  # 传递给 Worker
             "draw_span": draw_span,      # 传递给 Worker
             # 视频处理参数
