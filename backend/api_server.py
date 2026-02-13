@@ -189,7 +189,7 @@ async def root():
     """API根路径"""
     return {
         "service": "MinerU Tianshu",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "description": "天枢 - 企业级 AI 数据预处理平台",
         "features": "文档、图片、音频、视频等多模态数据处理",
         "docs": "/docs",
@@ -356,8 +356,8 @@ async def get_task_status(
             source_filename = Path(task["file_path"]).name
             # 编码文件名，防止中文乱码
             encoded_source_filename = quote(source_filename)
-            # 生成 API 路径
-            source_url = f"/api/v1/files/input/{encoded_source_filename}"
+            # 生成 API 路径 (注意：这里使用 /upload/ 路径来对应下面的 serve_upload_file)
+            source_url = f"/api/v1/files/upload/{encoded_source_filename}"
         except Exception as e:
             logger.warning(f"Failed to generate source_url: {e}")
     # =========================
@@ -813,9 +813,6 @@ async def health_check():
 # ============================================================================
 # 自定义文件服务（支持 URL 编码的中文路径）
 # ============================================================================
-from urllib.parse import unquote
-
-
 @app.get("/v1/files/output/{file_path:path}", tags=["文件服务"])
 async def serve_output_file(file_path: str):
     """
@@ -859,8 +856,8 @@ async def serve_output_file(file_path: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/v1/files/input/{file_path:path}", tags=["文件服务"])
-async def serve_input_file(file_path: str):
+@app.get("/v1/files/upload/{file_path:path}", tags=["文件服务"])
+async def serve_upload_file(file_path: str):
     """
     提供上传源文件的访问服务 (用于前端预览源文件)
 
@@ -901,7 +898,7 @@ async def serve_input_file(file_path: str):
 
 
 logger.info(f"📁 File service mounted: /v1/files/output -> {OUTPUT_DIR}")
-logger.info(f"📁 File service mounted: /v1/files/input  -> {UPLOAD_DIR}")
+logger.info(f"📁 File service mounted: /v1/files/upload -> {UPLOAD_DIR}")
 logger.info("   Frontend can access images via: /api/v1/files/output/{task_id}/images/xxx.jpg (Nginx will strip /api/)")
 
 if __name__ == "__main__":
