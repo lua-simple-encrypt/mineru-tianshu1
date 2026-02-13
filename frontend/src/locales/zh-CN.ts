@@ -161,7 +161,12 @@ export default {
     // Backend options
     backendAuto: '🎯 自动选择（推荐，根据文件类型自动选择最佳引擎）',
     backendAutoHint: '🎯 自动选择: 系统会根据文件扩展名智能选择最合适的引擎进行处理',
-    backendPipeline: 'MinerU Pipeline（完整解析）',
+    backendPipeline: 'MinerU Pipeline（传统多模型管道）',
+    backendPipelineHint: '🚀 速度快、无幻觉，适合标准文档',
+    backendVLMAuto: 'MinerU VLM Auto（视觉大模型）',
+    backendVLMAutoHint: '👁️ 基于 MinerU 2.5 视觉模型，擅长复杂排版和图表',
+    backendHybridAuto: 'MinerU Hybrid（高精度混合）',
+    backendHybridAutoHint: '⚖️ 结合 Pipeline 与 VLM 优势，提供最高精度解析',
     backendPaddleOCR: 'PaddleOCR-VL（多语言 OCR，109+ 语言）',
     backendPaddleOCRHint: '🌏 PaddleOCR-VL: 自动多语言识别，支持文档方向校正、文本矫正、版面检测',
     backendPaddleOCRVLLM: 'PaddleOCR-VL-VLLM（高性能多语言 OCR）',
