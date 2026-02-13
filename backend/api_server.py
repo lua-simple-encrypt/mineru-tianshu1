@@ -186,7 +186,7 @@ async def submit_task(
     file: UploadFile = File(..., description="文件: PDF/图片/Office/HTML/音频/视频等多种格式"),
     backend: str = Form(
         "auto",
-        description="处理后端: auto (自动选择) | pipeline/paddleocr-vl (文档) | sensevoice (音频) | video (视频) | fasta/genbank (专业格式)",
+        description="处理后端: auto (自动) | pipeline (传统管道) | vlm-auto-engine (VLM大模型) | hybrid-auto-engine (混合高精度) | paddleocr-vl | sensevoice | video",
     ),
     lang: str = Form("auto", description="语言: auto/ch/en/korean/japan等"),
     method: str = Form("auto", description="解析方法: auto/txt/ocr"),
@@ -641,8 +641,20 @@ async def list_engines():
         "document": [
             {
                 "name": "pipeline",
-                "display_name": "MinerU Pipeline",
-                "description": "默认的 PDF/图片解析引擎，支持公式、表格等复杂结构",
+                "display_name": "Standard Pipeline (通用管道)",
+                "description": "基于 PDF-Extract-Kit 的传统多模型管道，速度快，无幻觉，适合大多数文档。",
+                "supported_formats": [".pdf", ".png", ".jpg", ".jpeg"],
+            },
+            {
+                "name": "vlm-auto-engine",
+                "display_name": "MinerU 2.5 VLM (视觉大模型)",
+                "description": "基于 MinerU 2.5 (1.2B) 视觉模型，擅长处理复杂排版、图表和非标准文档。",
+                "supported_formats": [".pdf", ".png", ".jpg", ".jpeg"],
+            },
+            {
+                "name": "hybrid-auto-engine",
+                "display_name": "Hybrid High-Precision (高精度混合)",
+                "description": "结合 Pipeline 的稳定性与 VLM 的理解能力，提供最高精度的解析效果。",
                 "supported_formats": [".pdf", ".png", ".jpg", ".jpeg"],
             },
         ],
