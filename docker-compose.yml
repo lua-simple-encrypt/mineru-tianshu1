@@ -156,11 +156,13 @@ services:
 
   # ============================================================================
   # vLLM Service - PaddleOCR Fix (PaddleOCR-VL-1.5)
+  # ⚠️ 修改：增加 profiles: ["manual"]，防止自动启动
   # ============================================================================
   vllm-paddleocr:
     image: vllm/vllm-openai:nightly
     container_name: tianshu-vllm-paddleocr
-    restart: unless-stopped
+    restart: no # 不自动重启，由程序控制
+    profiles: ["manual"] # 手动模式
     ports:
       - "30023:30023"
     volumes:
@@ -189,25 +191,18 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:30023/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
     networks:
       - tianshu-network
-    depends_on:
-      init-models:
-        condition: service_completed_successfully
 
   # ============================================================================
   # vLLM Service - MinerU (MinerU-1.2B)
+  # ⚠️ 修改：增加 profiles: ["manual"]，防止自动启动
   # ============================================================================
   vllm-mineru:
     image: vllm/vllm-openai:nightly
     container_name: tianshu-vllm-mineru
-    restart: unless-stopped
+    restart: no
+    profiles: ["manual"]
     ports:
       - "30024:30024"
     volumes:
@@ -236,26 +231,17 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:30024/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
     networks:
       - tianshu-network
-    depends_on:
-      init-models:
-        condition: service_completed_successfully
 
   # ============================================================================
   # LitServe GPU Worker (复用 Backend 镜像)
+  # ⚠️ 修改：挂载 docker.sock，移除 depends_on 中的 vllm 服务
   # ============================================================================
   worker:
     image: tianshu-backend:latest
     container_name: tianshu-worker
     restart: unless-stopped
-    # ⚠️ 修改：将硬编码 IP 替换为 vllm 服务名，并新增 MinerU API 配置
     command: [
       "worker",
       "python",
@@ -267,6 +253,8 @@ services:
     ports:
       - "${WORKER_PORT:-8001}:8001"
     volumes:
+      # ⚠️ 关键：挂载 Docker Socket，允许 Worker 控制容器
+      - /var/run/docker.sock:/var/run/docker.sock
       - ./models:/app/models:rw
       - ./magic-pdf.json:/root/magic-pdf.json:ro
       - ./input:/app/data/uploads:rw
@@ -327,16 +315,9 @@ services:
     networks:
       - tianshu-network
     depends_on:
-      rustfs:
-        condition: service_started
-      backend:
-        condition: service_started
-      init-models:
-        condition: service_completed_successfully
-      vllm-paddleocr:
-        condition: service_started
-      vllm-mineru:
-        condition: service_started
+      - rustfs
+      - backend
+      # 移除 vllm 的依赖
 
   # ============================================================================
   # MCP Server (复用 Backend 镜像)
@@ -415,9 +396,9 @@ networks:
 volumes:
   models:
     driver: local
-  uploads:  # 保留此定义以兼容旧volume，虽然实际上映射了本地路径
+  uploads:
     driver: local
-  output:   # 保留此定义以兼容旧volume，虽然实际上映射了本地路径
+  output:
     driver: local
   logs:
     driver: local
