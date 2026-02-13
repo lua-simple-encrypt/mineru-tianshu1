@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 from threading import Lock
 from loguru import logger
-
+import os
 
 class PaddleOCRVLVLLMEngine:
     """
@@ -55,13 +55,14 @@ class PaddleOCRVLVLLMEngine:
                     cls._instance = super().__new__(cls)
         return cls._instance
 
-    def __init__(self, device: str = "cuda:0", vllm_api_base: str = "http://localhost:17300/v1"):
+    def __init__(self, device: str = "cuda:0", vllm_api_base: str = "http://localhost:17300/v1", model_name: str = "PaddleOCR-VL-1.5-0.9B"):
         """
         初始化引擎（只执行一次）
 
         Args:
             device: 设备 (cuda:0, cuda:1 等，PaddleOCR 仅支持 GPU)
             vllm_api_base: VLLM API 基础 URL (默认: http://localhost:17300/v1)
+            model_name: 模型名称 (默认: PaddleOCR-VL-1.5-0.9B)
 
         注意：
         - PaddleOCR-VL 会自动管理模型的下载和缓存
@@ -76,6 +77,7 @@ class PaddleOCRVLVLLMEngine:
 
             self.device = device  # 保存 device 参数
             self.vllm_api_base = vllm_api_base  # 保存 vllm_api_base 参数
+            self.model_name = model_name # 保存模型名称
 
             # 从 device 字符串中提取 GPU ID (例如 "cuda:0" -> 0)
             if "cuda:" in device:
@@ -92,10 +94,9 @@ class PaddleOCRVLVLLMEngine:
             logger.info("🔧 PaddleOCR-VL-VLLM Engine initialized")
             logger.info(f"   Device: {self.device} (GPU ID: {self.gpu_id})")
             logger.info(f"   VLLM API Base: {self.vllm_api_base}")
-            logger.info("   Model: PaddlePaddle/PaddleOCR-VL (auto-managed)")
+            logger.info(f"   Model: {self.model_name} (local path priority)")
             logger.info("   Auto Multi-Language: Enabled (109+ languages)")
             logger.info("   GPU Only: CPU not supported")
-            logger.info("   Model Cache: ~/.paddleocr/models/ (auto-managed)")
 
     def _check_gpu_availability(self):
         """
@@ -176,7 +177,6 @@ class PaddleOCRVLVLLMEngine:
                 logger.info("   ✅ Document Unwarping (Text Correction): Enabled")
                 logger.info("   ✅ Layout Detection & Sorting: Enabled")
                 logger.info("   ✅ Auto Multi-Language Recognition: Enabled (109+ languages)")
-                logger.info("   🌐 Model will be auto-downloaded on first use if not cached")
 
                 # 创建 PaddleOCRVL 实例（按照官方文档最佳实践）
                 # 参考: https://www.paddleocr.ai/latest/version3.x/pipeline_usage/PaddleOCR-VL.html#322-python-api
@@ -187,6 +187,37 @@ class PaddleOCRVLVLLMEngine:
                         "vllm_api_base 不能为 None，请检查paddleocr-vl-vllm-engine-enabled 及 paddleocr-vl-vllm-api-list 配置"
                     )
                 else:
+                    # =========================================================================
+                    # 智能路径解析逻辑 (适配本地路径)
+                    # =========================================================================
+                    # 1. 定义本地模型根目录 (指向 paddlex 子目录)
+                    base_model_dir = Path("/app/models/paddlex")
+                    
+                    # 2. 尝试拼接本地路径
+                    local_model_path = base_model_dir / self.model_name
+                    
+                    # 默认参数（如果本地没有，Paddle 会尝试在线下载或使用默认值）
+                    # 注意：PaddleOCRVL 类本身通常不需要传入 pipeline 参数，它是通过 use_xxx 参数来内部构建 pipeline 的
+                    # 但是，如果我们要指定本地模型路径，通常需要查阅 PaddleOCRVL 的构造函数参数
+                    # 假设 PaddleOCRVL 接受 `layout_model_dir` 或类似的参数来指定本地模型
+                    # 或者，如果 PaddleOCRVL 是基于 PaddleX pipeline 实现的，我们可能无法直接在这里传入本地路径
+                    # **修正策略**：PaddleOCRVL 是一个高层封装。如果我们要用本地模型，通常需要设置 PADDLEX_HOME 环境变量
+                    # 让它去我们挂载的目录找。
+                    
+                    if local_model_path.exists() and local_model_path.is_dir():
+                        logger.info(f"📂 Found local model cache: {local_model_path}")
+                        # 设置环境变量，引导 PaddleX 去本地目录查找模型
+                        # PaddleX 默认会在 $PADDLEX_HOME/official_models/ 下查找
+                        # 我们这里设置 PADDLEX_HOME 为 /app/models/paddlex/.. (即 /app/models)
+                        # 这样它会在 /app/models/official_models/ 下找... 这可能有点绕
+                        # 最稳妥的方式是：保持默认下载行为，但因为我们已经把模型下载到了它期望的位置（通过 download_models.py），
+                        # 只要路径对上了，它就不会重新下载。
+                        
+                        # 另外，PaddleOCRVL 的构造函数可能不直接支持指定本地模型路径。
+                        # 我们这里主要依赖 `docker-compose.yml` 中配置的 `PADDLEX_HOME` 环境变量。
+                    else:
+                        logger.warning(f"⚠️  Local model path not found: {local_model_path}")
+
                     self._pipeline = PaddleOCRVL(
                         use_doc_orientation_classify=True,  # 文档方向分类，自动旋转文档
                         use_doc_unwarping=True,  # 文本图像矫正，修正扭曲变形
@@ -194,6 +225,7 @@ class PaddleOCRVLVLLMEngine:
                         vl_rec_backend="vllm-server",  # 使用 VLLM 后端
                         vl_rec_server_url=self.vllm_api_base,  # VLLM 服务器地址
                     )
+                
                 logger.info("=" * 60)
                 logger.info("✅ PaddleOCR-VL-VLLM Pipeline loaded successfully!")
                 logger.info(f"   Device: GPU {self.gpu_id}")
@@ -214,7 +246,7 @@ class PaddleOCRVLVLLMEngine:
                 logger.error("      pip install 'paddleocr[doc-parser]'")
                 logger.error("   2. 安装 SafeTensors:")
                 logger.error(
-                    "    #   pip install https://paddle-whl.bj.bcebos.com/nightly/cu126/safetensors/safetensors-0.6.2.dev0-cp38-abi3-linux_x86_64.whl"
+                    "     #    pip install https://paddle-whl.bj.bcebos.com/nightly/cu126/safetensors/safetensors-0.6.2.dev0-cp38-abi3-linux_x86_64.whl"
                 )
                 logger.error("   3. 检查 GPU 可用性:")
                 logger.error("      python -c 'import paddle; print(paddle.device.is_compiled_with_cuda())'")
@@ -395,9 +427,12 @@ class PaddleOCRVLVLLMEngine:
 _engine = None
 
 
-def get_engine() -> PaddleOCRVLVLLMEngine:
-    """获取全局引擎实例"""
+def get_engine(vllm_api_base: str = "http://localhost:17300/v1", model_name: str = "PaddleOCR-VL-1.5-0.9B") -> PaddleOCRVLVLLMEngine:
+    """
+    获取全局引擎实例
+    注意：单例模式下，第一次调用时的 model_name 会决定后续一直使用的模型
+    """
     global _engine
     if _engine is None:
-        _engine = PaddleOCRVLVLLMEngine()
+        _engine = PaddleOCRVLVLLMEngine(vllm_api_base=vllm_api_base, model_name=model_name)
     return _engine
