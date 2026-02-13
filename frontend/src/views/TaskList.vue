@@ -1,15 +1,12 @@
 <template>
   <div>
-    <!-- 页面标题 -->
     <div class="mb-6">
       <h1 class="text-2xl font-bold text-gray-900">{{ $t('task.taskList') }}</h1>
       <p class="mt-1 text-sm text-gray-600">{{ $t('task.taskList') }}</p>
     </div>
 
-    <!-- 筛选和搜索 -->
     <div class="card mb-6">
       <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <!-- 状态筛选 -->
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-2">{{ $t('task.filterByStatus') }}</label>
           <select
@@ -26,7 +23,6 @@
           </select>
         </div>
 
-        <!-- 后端筛选 -->
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-2">{{ $t('task.backend') }}</label>
           <select
@@ -36,6 +32,8 @@
           >
             <option value="">{{ $t('task.allStatus') }}</option>
             <option value="pipeline">MinerU Pipeline</option>
+            <option value="vlm-auto-engine">MinerU VLM Auto</option>
+            <option value="hybrid-auto-engine">MinerU Hybrid</option>
             <option value="paddleocr-vl">PaddleOCR-VL</option>
             <option value="paddleocr-vl-vllm">PaddleOCR-VL-VLLM</option>
             <option value="vlm-transformers">VLM Transformers</option>
@@ -43,7 +41,6 @@
           </select>
         </div>
 
-        <!-- 搜索 -->
         <div class="md:col-span-2">
           <label class="block text-sm font-medium text-gray-700 mb-2">{{ $t('common.search') }}</label>
           <div class="relative">
@@ -80,7 +77,6 @@
       </div>
     </div>
 
-    <!-- 任务列表 -->
     <div class="card">
       <div v-if="loading && tasks.length === 0" class="text-center py-12">
         <LoadingSpinner :text="$t('common.loading')" />
@@ -182,9 +178,7 @@
         </table>
       </div>
 
-      <!-- 批量操作和分页 -->
       <div v-if="filteredTasks.length > 0" class="mt-4 flex items-center justify-between">
-        <!-- 批量操作 -->
         <div class="flex items-center gap-2">
           <span v-if="selectedTasks.length > 0" class="text-sm text-gray-600">
             {{ $t('common.selected') }}: {{ selectedTasks.length }}
@@ -199,7 +193,6 @@
           </button>
         </div>
 
-        <!-- 分页 -->
         <div class="flex items-center gap-2">
           <button
             @click="currentPage--"
@@ -222,7 +215,6 @@
       </div>
     </div>
 
-    <!-- 取消确认对话框 -->
     <ConfirmDialog
       v-model="showCancelDialog"
       :title="$t('common.confirm')"
