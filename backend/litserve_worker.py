@@ -170,27 +170,33 @@ except ImportError as e:
 
 
 # ==============================================================================
-# VLLM Container Controller (新增)
+# VLLM Container Controller (修复版：解决 Pickle 问题)
 # ==============================================================================
 class VLLMController:
     """管理 vLLM Docker 容器的按需启动和关闭"""
+    
     def __init__(self):
-        self.docker_client = None
+        # 不在 __init__ 中创建 client，确保对象是可序列化的
+        pass
+
+    def _get_client(self):
+        """按需获取 Docker 客户端"""
         try:
             import docker
             # 连接到挂载的 /var/run/docker.sock
-            self.docker_client = docker.from_env()
-            logger.info("🐳 Docker client initialized successfully")
+            return docker.from_env()
         except Exception as e:
-            logger.warning(f"⚠️  Docker client init failed (Manual start/stop disabled): {e}")
+            logger.warning(f"⚠️  Docker client init failed: {e}")
+            return None
 
     def start_container(self, container_name: str, health_url: str, timeout: int = 300):
         """启动容器并等待健康检查通过"""
-        if not self.docker_client:
+        client = self._get_client()
+        if not client:
             return
         
         try:
-            container = self.docker_client.containers.get(container_name)
+            container = client.containers.get(container_name)
             if container.status == 'running':
                 logger.info(f"✅ Container {container_name} is already running")
             else:
@@ -203,20 +209,31 @@ class VLLMController:
         except Exception as e:
             logger.error(f"❌ Failed to start container {container_name}: {e}")
             raise RuntimeError(f"Failed to start dependent service {container_name}")
+        finally:
+            try:
+                client.close()
+            except:
+                pass
 
     def stop_container(self, container_name: str):
         """停止容器"""
-        if not self.docker_client:
+        client = self._get_client()
+        if not client:
             return
             
         try:
-            container = self.docker_client.containers.get(container_name)
+            container = client.containers.get(container_name)
             if container.status == 'running':
                 logger.info(f"🛑 Stopping container {container_name}...")
                 container.stop()
                 logger.info(f"✅ Container {container_name} stopped")
         except Exception as e:
             logger.warning(f"⚠️  Failed to stop container {container_name}: {e}")
+        finally:
+            try:
+                client.close()
+            except:
+                pass
 
     def _wait_for_health(self, url: str, timeout: int):
         """轮询健康检查接口"""
@@ -265,9 +282,9 @@ class MinerUWorkerAPI(ls.LitAPI):
         ctx = multiprocessing.get_context("spawn")
         self._global_worker_counter = ctx.Value("i", 0)
 
-        # 【修正】不要在 __init__ 中初始化 VLLMController，避免 pickle 错误
-        # self.vllm_controller = VLLMController()
-        self.vllm_controller = None
+        # 【关键修改】在 __init__ 中直接初始化 VLLMController
+        # 因为现在的 VLLMController 不持有不可序列化的 client 对象，所以是安全的
+        self.vllm_controller = VLLMController()
 
     def setup(self, device):
         """
@@ -282,9 +299,6 @@ class MinerUWorkerAPI(ls.LitAPI):
             self._global_worker_counter.value += 1
         logger.info(f"🔢 [Init] I am Global Worker #{my_global_index} (on {device})")
         
-        # 【修正】在 Worker 进程中初始化 Docker 控制器
-        self.vllm_controller = VLLMController()
-
         # 1. 分配 PaddleOCR VLLM API
         if self.paddleocr_vl_vllm_engine_enabled and len(self.paddleocr_vl_vllm_api_list) > 0:
             assigned_api = self.paddleocr_vl_vllm_api_list[my_global_index % len(self.paddleocr_vl_vllm_api_list)]
