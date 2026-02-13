@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """
-模型预下载脚本 - Tianshu (Fixed for PaddleX/ModelScope)
+模型预下载脚本 - Tianshu (Official 3-Options Support + Full PaddleX Models)
 
-修复了 ModelScope 上部分 Paddle 模型 ID 不存在的问题。
-部分模型切换回 HuggingFace 或放宽校验规则。
+支持官方的三种解析引擎选项:
+1. pipeline (传统多模型管道)
+2. vlm-auto-engine (VLM 自动引擎)
+3. hybrid-auto-engine (混合高精度引擎)
+
+同时下载所有指定的 PaddleX/PaddleOCR 模型到 /app/models/paddlex/ 目录下
 """
 
 import os
@@ -23,14 +27,14 @@ logger.add(sys.stdout, format="<green>{time:HH:mm:ss}</green> | <level>{level: <
 # ==============================================================================
 MODELS = {
     # -------------------------------------------------------------------------
-    # 1. MinerU 核心模型
+    # 1. MinerU 核心模型 (保持扁平结构)
     # -------------------------------------------------------------------------
     "mineru_pipeline": {
         "name": "MinerU Pipeline (PDF-Extract-Kit)",
         "repo_id": "OpenDataLab/PDF-Extract-Kit-1.0",
         "source": "modelscope",
         "target_dir": "PDF-Extract-Kit-1.0",
-        "description": "PDF OCR, Layout Analysis models",
+        "description": "PDF OCR, Layout Analysis models (For 'pipeline' mode)",
         "required": True
     },
     "mineru_vlm": {
@@ -38,30 +42,31 @@ MODELS = {
         "model_id": "opendatalab/MinerU2.5-2509-1.2B",
         "source": "modelscope",
         "target_dir": "MinerU2.5-2509-1.2B",
-        "description": "Vision Language Model",
+        "description": "Vision Language Model (For 'vlm-auto-engine' & 'hybrid-auto-engine')",
         "required": True
     },
 
     # -------------------------------------------------------------------------
-    # 2. PaddleX / PaddleOCR 模型
-    # 注意：ModelScope 上很多 Paddle 模型 ID 不存在，这里做了一些修正
-    # 对于找不到的，我们暂时设为 auto_download=True，让 PaddleX 运行时自己去 BOS 下载
+    # 2. PaddleX / PaddleOCR 模型 (全部归档到 paddlex/ 子目录)
     # -------------------------------------------------------------------------
     
-    # --- 多模态文档解析 (ModelScope 上暂无，设为自动下载) ---
+    # --- 多模态文档解析 ---
     "paddleocr_vl_1_5": {
         "name": "PaddleOCR-VL-1.5-0.9B",
+        "repo_id": "PaddlePaddle/PaddleOCR-VL-1.5",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/PaddleOCR-VL-1.5-0.9B",
         "target_dir": "paddlex/PaddleOCR-VL-1.5-0.9B",
-        # ModelScope/HF 上暂时没有官方托管的这个模型，建议让 PaddleX 自动下载
-        # 或者您可以手动上传到自己的私有仓库
-        "auto_download": True, 
-        "description": "PaddleX will download this from BOS automatically",
+        "description": "多模态文档解析模型 v1.5",
         "required": True
     },
     "paddleocr_vl_0_9": {
         "name": "PaddleOCR-VL-0.9B",
+        "repo_id": "PaddlePaddle/PaddleOCR-VL-0.9B",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/PaddleOCR-VL-0.9B",
         "target_dir": "paddlex/PaddleOCR-VL-0.9B",
-        "auto_download": True,
+        "description": "多模态文档解析模型 v1.0",
         "required": False
     },
 
@@ -73,23 +78,25 @@ MODELS = {
         "target_dir": "paddlex/PP-DocLayoutV3",
         "required": True
     },
-    # 修正：ModelScope 上可能没有 V2 和 Plus，设为自动下载
     "pp_doclayout_v2": {
         "name": "PP-DocLayoutV2",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/PP-DocLayoutV2",
         "target_dir": "paddlex/PP-DocLayoutV2",
-        "auto_download": True,
         "required": False
     },
     "pp_doclayout_plus_l": {
         "name": "PP-DocLayout_plus-L",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/PP-DocLayout_plus-L",
         "target_dir": "paddlex/PP-DocLayout_plus-L",
-        "auto_download": True,
         "required": False
     },
     "pp_docblocklayout": {
         "name": "PP-DocBlockLayout",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/PP-DocBlockLayout",
         "target_dir": "paddlex/PP-DocBlockLayout",
-        "auto_download": True,
         "required": False
     },
 
@@ -101,17 +108,18 @@ MODELS = {
         "target_dir": "paddlex/PP-LCNet_x1_0_doc_ori",
         "required": True
     },
-    # 修正：ModelScope 缺失，设为自动
     "pp_lcnet_textline_ori": {
         "name": "PP-LCNet_x1_0_textline_ori",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/PP-LCNet_x1_0_textline_ori",
         "target_dir": "paddlex/PP-LCNet_x1_0_textline_ori",
-        "auto_download": True,
         "required": False
     },
     "pp_lcnet_x0_25_textline_ori": {
         "name": "PP-LCNet_x0_25_textline_ori",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/PP-LCNet_x0_25_textline_ori",
         "target_dir": "paddlex/PP-LCNet_x0_25_textline_ori",
-        "auto_download": True,
         "required": False
     },
     "uvdoc": {
@@ -152,23 +160,26 @@ MODELS = {
         "required": False
     },
 
-    # --- 多语言 OCR (ModelScope 缺失，设为自动) ---
+    # --- 多语言 OCR ---
     "eslav_pp_ocrv5_mobile_rec": {
         "name": "eslav_PP-OCRv5_mobile_rec",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/eslav_PP-OCRv5_mobile_rec",
         "target_dir": "paddlex/eslav_PP-OCRv5_mobile_rec",
-        "auto_download": True,
         "required": False
     },
     "korean_pp_ocrv5_mobile_rec": {
         "name": "korean_PP-OCRv5_mobile_rec",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/korean_PP-OCRv5_mobile_rec",
         "target_dir": "paddlex/korean_PP-OCRv5_mobile_rec",
-        "auto_download": True,
         "required": False
     },
     "latin_pp_ocrv5_mobile_rec": {
         "name": "latin_PP-OCRv5_mobile_rec",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/latin_PP-OCRv5_mobile_rec",
         "target_dir": "paddlex/latin_PP-OCRv5_mobile_rec",
-        "auto_download": True,
         "required": False
     },
 
@@ -334,13 +345,9 @@ def verify_model_files(path, model_name):
             
     # 3. Paddle Models (OCR, Layout, LCNet)
     elif "paddle" in model_name or "pp_" in model_name or "slanext" in model_name or "uvdoc" in model_name or "rtdetr" in model_name:
-         # 放宽校验：只要包含 pdmodel, pdiparams, pdparams, yaml 中的任意一个，就认为有效
-         # 有些模型可能只有 pdparams 权重文件
-         if not (any(path_obj.rglob("*.pdmodel")) or 
-                 any(path_obj.rglob("*.pdiparams")) or 
-                 any(path_obj.rglob("*.pdparams")) or  # 新增 pdparams 支持
-                 any(path_obj.rglob("*.yaml"))):
-              logger.warning(f"   ⚠️  No Paddle inference/weight files found in {path}")
+         # PaddleX 模型通常包含 inference.pdmodel 等文件
+         if not (any(path_obj.rglob("*.pdmodel")) or any(path_obj.rglob("*.pdiparams")) or any(path_obj.rglob("*.yaml"))):
+              logger.warning(f"   ⚠️  No Paddle inference files found in {path}")
               return False
               
     # 4. YOLO (单文件或目录)
@@ -403,7 +410,7 @@ def generate_magic_pdf_json(output_dir):
 
 def main(output_dir, selected_models=None, force=False):
     logger.info("=" * 60)
-    logger.info("🚀 Tianshu Model Download Script (Fixed ModelScope IDs)")
+    logger.info("🚀 Tianshu Model Download Script (Official 3-Options + PaddleX)")
     logger.info("=" * 60)
 
     output_path = Path(output_dir).resolve()
@@ -425,7 +432,7 @@ def main(output_dir, selected_models=None, force=False):
         try:
             # 自动下载模型跳过
             if config.get("auto_download"):
-                logger.info(f"   ℹ️  {name} will be auto-downloaded by library (not in ModelScope)")
+                logger.info(f"   ℹ️  {name} will be auto-downloaded by library")
                 manifest["models"][name] = {"status": "auto_download"}
                 continue
 
@@ -446,7 +453,7 @@ def main(output_dir, selected_models=None, force=False):
             # 下载
             logger.info(f"   ⬇️  Downloading to {config['target_dir']}...")
             path = None
-            src = config.get("source", "modelscope")
+            src = config["source"]
             
             if src == "huggingface":
                 path = download_from_huggingface(
