@@ -170,10 +170,10 @@ except ImportError as e:
 
 
 # ==============================================================================
-# VLLM Container Controller (修复版：解决 Pickle 问题)
+# VLLM Container Controller (互斥切换版)
 # ==============================================================================
 class VLLMController:
-    """管理 vLLM Docker 容器的按需启动和关闭"""
+    """管理 vLLM Docker 容器的互斥启动"""
     
     def __init__(self):
         # 不在 __init__ 中创建 client，确保对象是可序列化的
@@ -189,46 +189,51 @@ class VLLMController:
             logger.warning(f"⚠️  Docker client init failed: {e}")
             return None
 
-    def start_container(self, container_name: str, health_url: str, timeout: int = 300):
-        """启动容器并等待健康检查通过"""
+    def ensure_service(self, target_container: str, conflict_container: str, health_url: str, timeout: int = 300):
+        """
+        确保目标容器运行，并关闭冲突容器
+        
+        Args:
+            target_container: 需要运行的容器名
+            conflict_container: 需要关闭的互斥容器名
+            health_url: 目标容器的健康检查地址
+            timeout: 超时时间
+        """
         client = self._get_client()
         if not client:
             return
         
         try:
-            container = client.containers.get(container_name)
-            if container.status == 'running':
-                logger.info(f"✅ Container {container_name} is already running")
-            else:
-                logger.info(f"🚀 Starting container {container_name}...")
-                container.start()
-            
-            # 等待健康检查
-            self._wait_for_health(health_url, timeout)
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to start container {container_name}: {e}")
-            raise RuntimeError(f"Failed to start dependent service {container_name}")
-        finally:
+            # 1. 检查目标容器是否已经在运行
             try:
-                client.close()
-            except:
+                target = client.containers.get(target_container)
+                if target.status == 'running':
+                    # 如果已经在运行，直接返回，无需操作
+                    logger.info(f"✅ Target service {target_container} is already running.")
+                    return
+            except Exception as e:
+                # 如果找不到容器，可能说明没创建，抛出错误提示用户
+                logger.error(f"❌ Container {target_container} not found. Please run 'docker compose up --no-start {target_container}' first.")
+                raise e
+
+            # 2. 停止冲突容器 (释放显存)
+            try:
+                conflict = client.containers.get(conflict_container)
+                if conflict.status == 'running':
+                    logger.info(f"🛑 Stopping conflicting service {conflict_container} to free VRAM...")
+                    conflict.stop()
+                    logger.info(f"✅ Service {conflict_container} stopped.")
+            except Exception:
+                # 冲突容器可能不存在或已停止，忽略
                 pass
 
-    def stop_container(self, container_name: str):
-        """停止容器"""
-        client = self._get_client()
-        if not client:
-            return
+            # 3. 启动目标容器
+            logger.info(f"🚀 Starting service {target_container} (Cold Start)...")
+            target.start()
+
+            # 4. 等待健康检查
+            self._wait_for_health(health_url, timeout)
             
-        try:
-            container = client.containers.get(container_name)
-            if container.status == 'running':
-                logger.info(f"🛑 Stopping container {container_name}...")
-                container.stop()
-                logger.info(f"✅ Container {container_name} stopped")
-        except Exception as e:
-            logger.warning(f"⚠️  Failed to stop container {container_name}: {e}")
         finally:
             try:
                 client.close()
@@ -613,7 +618,7 @@ class MinerUWorkerAPI(ls.LitAPI):
 
     def _process_task(self, task: dict):
         """
-        处理单个任务
+        处理单个任务 (集成互斥启动逻辑)
 
         Args:
             task: 任务字典（从数据库拉取）
@@ -624,26 +629,24 @@ class MinerUWorkerAPI(ls.LitAPI):
         parent_task_id = task.get("parent_task_id")
         backend = task.get("backend", "auto")
         
-        container_to_manage = None
-        health_check_url = None
-
         try:
-            # 1. 判断是否需要启动外部 vLLM 容器
+            # 1. 智能服务切换逻辑
+            paddle_container = "tianshu-vllm-paddleocr"
+            mineru_container = "tianshu-vllm-mineru"
+            
+            # 如果是 PaddleOCR 任务
             if backend == "paddleocr-vl-vllm" and self.paddleocr_vl_vllm_api:
-                container_to_manage = "tianshu-vllm-paddleocr"
-                # 从 API 地址 http://vllm-paddleocr:30023/v1 推导 health url
                 base = self.paddleocr_vl_vllm_api.replace("/v1", "")
-                health_check_url = f"{base}/health"
+                health = f"{base}/health"
+                # 确保 Paddle 运行，关闭 MinerU
+                self.vllm_controller.ensure_service(paddle_container, mineru_container, health)
                 
+            # 如果是 MinerU 任务
             elif backend in ["vlm-auto-engine", "hybrid-auto-engine"] and self.mineru_vllm_api:
-                container_to_manage = "tianshu-vllm-mineru"
                 base = self.mineru_vllm_api.replace("/v1", "")
-                health_check_url = f"{base}/health"
-
-            # 2. 如果需要，启动容器
-            if container_to_manage:
-                logger.info(f"🔌 Auto-starting required service: {container_to_manage}")
-                self.vllm_controller.start_container(container_to_manage, health_check_url)
+                health = f"{base}/health"
+                # 确保 MinerU 运行，关闭 Paddle
+                self.vllm_controller.ensure_service(mineru_container, paddle_container, health)
 
             # 检查文件扩展名
             file_ext = Path(file_path).suffix.lower()
@@ -836,12 +839,6 @@ class MinerUWorkerAPI(ls.LitAPI):
                 self.task_db.on_child_task_failed(task_id, error_msg)
 
             raise
-
-        finally:
-            # 4. 任务结束后关闭容器
-            if container_to_manage:
-                logger.info(f"🔌 Auto-stopping service: {container_to_manage}")
-                self.vllm_controller.stop_container(container_to_manage)
 
     def _process_with_mineru(self, file_path: str, options: dict) -> dict:
         """
