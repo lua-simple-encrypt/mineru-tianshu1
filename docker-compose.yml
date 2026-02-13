@@ -156,13 +156,13 @@ services:
 
   # ============================================================================
   # vLLM Service - PaddleOCR Fix (PaddleOCR-VL-1.5)
-  # ⚠️ 修改：增加 profiles: ["manual"]，防止自动启动
+  # ⚠️ 手动模式：Worker 将按需启动此服务
   # ============================================================================
   vllm-paddleocr:
     image: vllm/vllm-openai:nightly
     container_name: tianshu-vllm-paddleocr
     restart: no # 不自动重启，由程序控制
-    profiles: ["manual"] # 手动模式
+    profiles: ["manual"] # 手动模式，默认不启动
     ports:
       - "30023:30023"
     volumes:
@@ -171,7 +171,7 @@ services:
       - /etc/localtime:/etc/localtime:ro
     environment:
       - TZ=Asia/Shanghai
-      # 可以通过环境变量控制显卡，例如 CUDA_VISIBLE_DEVICES=1
+      # 可以通过环境变量控制显卡，例如 CUDA_VISIBLE_DEVICES=0
       - CUDA_VISIBLE_DEVICES=${VLLM_PADDLE_DEVICE:-0}
     command: >
       --model /models/PaddleOCR-VL-1.5
@@ -196,13 +196,13 @@ services:
 
   # ============================================================================
   # vLLM Service - MinerU (MinerU-1.2B)
-  # ⚠️ 修改：增加 profiles: ["manual"]，防止自动启动
+  # ⚠️ 手动模式：Worker 将按需启动此服务
   # ============================================================================
   vllm-mineru:
     image: vllm/vllm-openai:nightly
     container_name: tianshu-vllm-mineru
-    restart: no
-    profiles: ["manual"]
+    restart: no # 不自动重启
+    profiles: ["manual"] # 手动模式，默认不启动
     ports:
       - "30024:30024"
     volumes:
@@ -211,7 +211,7 @@ services:
       - /etc/localtime:/etc/localtime:ro
     environment:
       - TZ=Asia/Shanghai
-      # 可以通过环境变量控制显卡，例如 CUDA_VISIBLE_DEVICES=2
+      # 可以通过环境变量控制显卡，例如 CUDA_VISIBLE_DEVICES=0
       - CUDA_VISIBLE_DEVICES=${VLLM_MINERU_DEVICE:-0}
     command: >
       --model /models/MinerU2.5-2509-1.2B
@@ -236,7 +236,7 @@ services:
 
   # ============================================================================
   # LitServe GPU Worker (复用 Backend 镜像)
-  # ⚠️ 修改：挂载 docker.sock，移除 depends_on 中的 vllm 服务
+  # ⚠️ 核心：使用 root 权限并挂载 docker.sock 以实现容器管理
   # ============================================================================
   worker:
     image: tianshu-backend:latest
@@ -255,7 +255,7 @@ services:
     ports:
       - "${WORKER_PORT:-8001}:8001"
     volumes:
-      # ⚠️ 关键：挂载 Docker Socket，允许 Worker 控制容器
+      # ⚠️ 关键：挂载 Docker Socket，允许 Worker 控制兄弟容器（启动/停止 vLLM）
       - /var/run/docker.sock:/var/run/docker.sock
       - ./models:/app/models:rw
       - ./magic-pdf.json:/root/magic-pdf.json:ro
@@ -319,7 +319,6 @@ services:
     depends_on:
       - rustfs
       - backend
-      # 移除 vllm 的依赖
 
   # ============================================================================
   # MCP Server (复用 Backend 镜像)
