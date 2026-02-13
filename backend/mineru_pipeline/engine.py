@@ -1,6 +1,6 @@
 """
 MinerU Pipeline Engine
-单例模式，每个进程只加载一次模型（实际上MinerU的模型初始化是由mineru.cli.common.do_parse的导入来进行触发的，这里作为引擎封装来统一引擎的加载格式）
+单例模式，每个进程只加载一次模型
 使用 MinerU 处理 PDF 和图片
 """
 
@@ -20,11 +20,9 @@ class MinerUPipelineEngine:
     特性：
     - 单例模式
     - 封装 MinerU 的 do_parse 调用
-    - 延迟加载（避免过早初始化模型）
-    - 支持 PDF 和图片（自动转换）
-    - 自动处理输出路径和结果解析
-    - 线程安全
-    - 支持 VLLM API 调用 (vlm-auto-engine/hybrid-auto-engine 模式)
+    - 支持 pipeline, vlm-auto-engine, hybrid-auto-engine 模式
+    - 支持 VLLM API 调用 (自动切换到 http-client 模式)
+    - 支持丰富的输出选项配置
     """
 
     _instance: Optional["MinerUPipelineEngine"] = None
@@ -119,7 +117,7 @@ class MinerUPipelineEngine:
         Args:
             file_path: 输入文件路径
             output_path: 输出目录路径
-            options: 处理选项 (包含 'parse_mode')
+            options: 处理选项
 
         Returns:
             包含结果的字典
@@ -131,23 +129,58 @@ class MinerUPipelineEngine:
         file_stem = Path(file_path).stem
         file_ext = Path(file_path).suffix.lower()
 
-        # 获取解析模式，默认为 'pipeline'
-        # 支持: 'pipeline', 'vlm-auto-engine', 'hybrid-auto-engine' (也兼容 'auto' 映射)
-        parse_mode = options.get("parse_mode", "pipeline")
-        if parse_mode == "auto":
-            parse_mode = "pipeline"
+        # 1. 确定 Backend (处理模式) 和 Server URL
+        # options["parse_mode"] 来自前端 API: pipeline | vlm-auto-engine | hybrid-auto-engine
+        user_backend = options.get("parse_mode", "pipeline")
+        if user_backend == "auto":
+            user_backend = "pipeline"
 
-        logger.info(f"🚀 MinerU Engine starting with mode: {parse_mode}")
+        backend = user_backend
+        server_url = None
 
-        # === 配置 VLLM 环境变量 (针对 VLM 模式) ===
-        # 如果配置了 vlm_api_base 且当前模式需要 VLM，则注入环境变量
-        if self.vlm_api_base and parse_mode in ["vlm-auto-engine", "hybrid-auto-engine"]:
-            # 设置 OpenAI 兼容的环境变量，vLLM 通常兼容此接口
-            os.environ["OPENAI_API_BASE"] = self.vlm_api_base
-            os.environ["OPENAI_API_KEY"] = "EMPTY"  # vLLM 通常不需要 Key
-            # 同时也设置 MinerU 可能使用的特定变量（视具体版本实现而定）
-            os.environ["MINERU_VLLM_ENDPOINT"] = self.vlm_api_base
-            logger.info(f"   Configured VLLM Endpoint for MinerU: {self.vlm_api_base}")
+        # 智能切换：如果配置了 vlm_api_base，则使用 http-client 模式以调用 vLLM 加速
+        if self.vlm_api_base:
+            if user_backend == "vlm-auto-engine":
+                backend = "vlm-http-client"
+                server_url = self.vlm_api_base
+                logger.info(f"🔄 [Accelerate] Switching backend to {backend} using vLLM")
+            elif user_backend == "hybrid-auto-engine":
+                backend = "hybrid-http-client"
+                server_url = self.vlm_api_base
+                logger.info(f"🔄 [Accelerate] Switching backend to {backend} using vLLM")
+        else:
+            if user_backend in ["vlm-auto-engine", "hybrid-auto-engine"]:
+                logger.info(f"ℹ️  Running {user_backend} locally (No vLLM configured)")
+
+        # 2. 确定 Method (解析方法)
+        # options["method"] 来自 API: auto | txt | ocr
+        parse_method = options.get("method", "auto")
+
+        # 3. 提取其他高级选项 (从 options 中获取，如果没有则使用默认值)
+        # 注意：这里我们允许前端通过 options 传递更多控制参数
+        
+        # 内容识别
+        formula_enable = options.get("formula_enable", True)
+        table_enable = options.get("table_enable", True)
+        
+        # 输出控制
+        f_draw_layout_bbox = options.get("draw_layout", True)      # 默认开启，方便调试
+        f_draw_span_bbox = options.get("draw_span", True)          # 默认开启
+        f_dump_md = True                                           # 始终生成 Markdown
+        f_dump_middle_json = True                                  # 始终生成中间 JSON
+        f_dump_model_output = True                                 # 始终生成模型输出
+        f_dump_orig_pdf = True                                     # 始终保存原始 PDF (用于校验)
+        f_dump_content_list = True                                 # 始终生成内容列表
+        
+        # 页面范围
+        start_page_id = options.get("start_page_id", 0)
+        end_page_id = options.get("end_page_id", None)             # None 表示处理到最后
+
+        logger.info(f"🚀 MinerU Engine starting")
+        logger.info(f"   Backend: {backend}")
+        logger.info(f"   Method: {parse_method}")
+        if server_url:
+            logger.info(f"   Server URL: {server_url}")
 
         # 加载管道 (do_parse 函数)
         do_parse_func = self._load_pipeline()
@@ -174,31 +207,44 @@ class MinerUPipelineEngine:
                 file_name = Path(file_path).name
 
             # 获取语言设置
-            # MinerU 不支持 "auto"，默认使用中文
+            # MinerU 推荐使用明确的语言列表，这里做简单的单语言映射
             lang = options.get("lang", "auto")
             if lang == "auto":
-                lang = "ch"
-                logger.info("🌐 Language set to 'ch' (MinerU doesn't support 'auto')")
+                lang = "ch"  # 默认中文/通用
+            logger.info(f"🌐 Language set to '{lang}'")
 
             # 调用 MinerU (do_parse)
-            # 根据 MinerU 2.0+ 规范，支持 parse_method 参数
+            # 严格按照 do_parse 函数签名传参
             do_parse_func(
-                pdf_file_names=[file_name],  # 文件名列表
-                pdf_bytes_list=[pdf_bytes],  # 文件字节列表
-                p_lang_list=[lang],  # 语言列表
-                output_dir=str(output_dir),  # 输出目录
-                output_format="md_json",  # 同时输出 Markdown 和 JSON
-                # 传递解析模式
-                parse_method=parse_mode, 
-                # 其他参数
-                end_page_id=options.get("end_page_id"),
-                layout_mode=options.get("layout_mode", True),
-                formula_enable=options.get("formula_enable", True),
-                table_enable=options.get("table_enable", True),
+                output_dir=str(output_dir),            # 输出目录
+                pdf_file_names=[file_name],            # 文件名列表
+                pdf_bytes_list=[pdf_bytes],            # 文件字节列表
+                p_lang_list=[lang],                    # 语言列表
+                
+                # 核心控制参数
+                backend=backend,                       # 后端 (pipeline/vlm-http-client/hybrid-http-client)
+                parse_method=parse_method,             # 解析方法 (auto/txt/ocr)
+                server_url=server_url,                 # VLLM 地址 (http-client 模式必需)
+                
+                # 功能开关
+                start_page_id=start_page_id,
+                end_page_id=end_page_id,
+                formula_enable=formula_enable,
+                table_enable=table_enable,
+                
+                # 输出控制
+                f_draw_layout_bbox=f_draw_layout_bbox,
+                f_draw_span_bbox=f_draw_span_bbox,
+                f_dump_md=f_dump_md,
+                f_dump_middle_json=f_dump_middle_json,
+                f_dump_model_output=f_dump_model_output,
+                f_dump_orig_pdf=f_dump_orig_pdf,
+                f_dump_content_list=f_dump_content_list
             )
 
             # MinerU 新版输出结构: {output_dir}/{file_name}/auto/{file_stem}.md
             # 递归查找 markdown 文件和 JSON 文件
+            # 注意：do_parse 可能会在 output_dir 下创建以 file_name 为名的子文件夹
             md_files = list(output_dir.rglob("*.md"))
 
             if md_files:
