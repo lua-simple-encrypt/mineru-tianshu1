@@ -1,276 +1,122 @@
 <template>
-  <div>
-    <!-- 返回按钮 -->
-    <div class="mb-4">
-      <button
-        @click="$router.back()"
-        class="text-sm text-gray-600 hover:text-gray-900 flex items-center"
-      >
-        <ArrowLeft class="w-4 h-4 mr-1" />
-        {{ $t('common.back') }}
-      </button>
+  <div class="h-[calc(100vh-4rem)] flex flex-col">
+    <div class="flex items-center justify-between mb-4 px-1 flex-shrink-0">
+      <div class="flex items-center gap-4">
+        <button
+          @click="$router.back()"
+          class="text-sm text-gray-600 hover:text-gray-900 flex items-center transition-colors"
+        >
+          <ArrowLeft class="w-4 h-4 mr-1" />
+          {{ $t('common.back') }}
+        </button>
+        <div class="h-4 w-px bg-gray-300"></div>
+        <h1 class="text-xl font-bold text-gray-900 truncate max-w-md" :title="task?.file_name">
+          {{ task?.file_name || $t('task.taskDetail') }}
+        </h1>
+        <StatusBadge v-if="task" :status="task.status" />
+      </div>
+
+      <div class="flex items-center gap-3">
+        <div v-if="task?.status === 'completed' && task?.data?.pdf_path" class="flex items-center bg-gray-100 rounded-lg p-1">
+          <button
+            @click="layoutMode = 'single'"
+            :class="['px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center', layoutMode === 'single' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700']"
+          >
+            <FileText class="w-3.5 h-3.5 mr-1.5" />
+            单页
+          </button>
+          <button
+            @click="layoutMode = 'split'"
+            :class="['px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center', layoutMode === 'split' ? 'bg-white text-primary-600 shadow-sm' : 'text-gray-500 hover:text-gray-700']"
+          >
+            <Columns class="w-3.5 h-3.5 mr-1.5" />
+            分屏对比
+          </button>
+        </div>
+
+        <button @click="refreshTask()" :disabled="loading" class="btn btn-secondary btn-sm">
+          <RefreshCw :class="{ 'animate-spin': loading }" class="w-4 h-4" />
+        </button>
+      </div>
     </div>
 
-    <!-- 页面标题 -->
-    <div class="mb-6">
-      <h1 class="text-2xl font-bold text-gray-900">{{ $t('task.taskDetail') }}</h1>
-      <p class="mt-1 text-sm text-gray-600">{{ $t('task.taskDetail') }}</p>
-    </div>
-
-    <div v-if="loading && !task" class="text-center py-12">
+    <div v-if="loading && !task" class="flex-1 flex items-center justify-center">
       <LoadingSpinner size="lg" :text="$t('common.loading')" />
     </div>
-
-    <div v-else-if="error" class="card bg-red-50 border-red-200">
-      <div class="flex items-center">
-        <AlertCircle class="w-6 h-6 text-red-600" />
-        <p class="ml-3 text-red-800">{{ error }}</p>
+    <div v-else-if="error" class="card bg-red-50 border-red-200 mx-1">
+      <div class="flex items-center text-red-800">
+        <AlertCircle class="w-6 h-6 mr-3" /> {{ error }}
       </div>
     </div>
 
-    <div v-else-if="task" class="space-y-6">
-      <!-- 基本信息卡片 -->
-      <div class="card">
-        <div class="flex items-center justify-between mb-4">
-          <h2 class="text-lg font-semibold text-gray-900">{{ $t('task.basicInfo') }}</h2>
-          <StatusBadge :status="task.status" />
-        </div>
-
-        <dl class="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <dt class="text-sm font-medium text-gray-500">{{ $t('task.taskId') }}</dt>
-            <dd class="mt-1 text-sm text-gray-900 font-mono">{{ task.task_id }}</dd>
-          </div>
-          <div>
-            <dt class="text-sm font-medium text-gray-500">{{ $t('task.fileName') }}</dt>
-            <dd class="mt-1 text-sm text-gray-900">{{ task.file_name }}</dd>
-          </div>
-          <div>
-            <dt class="text-sm font-medium text-gray-500">{{ $t('task.processingBackend') }}</dt>
-            <dd class="mt-1 text-sm text-gray-900">{{ formatBackendName(task.backend) }}</dd>
-          </div>
-          <div>
-            <dt class="text-sm font-medium text-gray-500">{{ $t('task.priority') }}</dt>
-            <dd class="mt-1 text-sm text-gray-900">{{ task.priority }}</dd>
-          </div>
-          <div>
-            <dt class="text-sm font-medium text-gray-500">{{ $t('task.createdAt') }}</dt>
-            <dd class="mt-1 text-sm text-gray-900">{{ formatDateTime(task.created_at) }}</dd>
-          </div>
-          <div>
-            <dt class="text-sm font-medium text-gray-500">{{ $t('task.startedAt') }}</dt>
-            <dd class="mt-1 text-sm text-gray-900">{{ formatDateTime(task.started_at) }}</dd>
-          </div>
-          <div>
-            <dt class="text-sm font-medium text-gray-500">{{ $t('task.completedAt') }}</dt>
-            <dd class="mt-1 text-sm text-gray-900">{{ formatDateTime(task.completed_at) }}</dd>
-          </div>
-          <div>
-            <dt class="text-sm font-medium text-gray-500">{{ $t('task.workerId') }}</dt>
-            <dd class="mt-1 text-sm text-gray-900 font-mono">{{ task.worker_id || '-' }}</dd>
-          </div>
-          <div v-if="task.started_at && task.completed_at">
-            <dt class="text-sm font-medium text-gray-500">{{ $t('task.processingTime') }}</dt>
-            <dd class="mt-1 text-sm text-gray-900">{{ formatDuration(task.started_at, task.completed_at) }}</dd>
-          </div>
-          <div>
-            <dt class="text-sm font-medium text-gray-500">{{ $t('task.retryCount') }}</dt>
-            <dd class="mt-1 text-sm text-gray-900">{{ task.retry_count }}</dd>
-          </div>
-        </dl>
-
-        <!-- 错误信息 -->
-        <div v-if="task.error_message" class="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg">
-          <div class="flex items-start">
-            <AlertCircle class="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
-            <div class="ml-3">
-              <h4 class="text-sm font-medium text-red-800">{{ $t('task.errorMessage') }}</h4>
-              <p class="mt-1 text-sm text-red-700 font-mono">{{ task.error_message }}</p>
+    <div v-else-if="task" class="flex-1 min-h-0 relative">
+      <div v-if="task.status !== 'completed'" class="max-w-3xl mx-auto mt-10 space-y-6 px-4">
+         <div class="card p-8 text-center">
+            <h2 class="text-xl font-semibold text-gray-900 mb-2">任务处理中</h2>
+            <p class="text-gray-500">请稍候，解析完成后将自动显示结果...</p>
+            <div class="mt-6 flex justify-center">
+               <LoadingSpinner />
             </div>
-          </div>
-        </div>
-
-        <!-- 操作按钮 -->
-        <div class="mt-6 flex gap-3">
-          <button
-            v-if="task.status === 'pending'"
-            @click="handleCancel"
-            :disabled="cancelling"
-            class="btn btn-secondary flex items-center"
-          >
-            <X class="w-4 h-4 mr-2" />
-            {{ $t('task.cancelTask') }}
-          </button>
-          <button
-            v-if="task.status === 'completed' && task.data"
-            @click="downloadMarkdown"
-            class="btn btn-primary flex items-center"
-          >
-            <Download class="w-4 h-4 mr-2" />
-            {{ $t('task.downloadMarkdown') }}
-          </button>
-          <button
-            @click="() => refreshTask()"
-            :disabled="loading"
-            class="btn btn-secondary flex items-center"
-          >
-            <RefreshCw :class="{ 'animate-spin': loading }" class="w-4 h-4 mr-2" />
-            {{ $t('common.refresh') }}
-          </button>
-        </div>
+         </div>
       </div>
 
-      <!-- 状态时间轴 -->
-      <div class="card">
-        <h2 class="text-lg font-semibold text-gray-900 mb-4">{{ $t('task.statusTimeline') }}</h2>
-        <div class="relative">
-          <div class="absolute left-4 top-0 bottom-0 w-0.5 bg-gray-200"></div>
-
-          <div class="space-y-4">
-            <!-- 创建 -->
-            <div class="relative flex items-start">
-              <div class="absolute left-0 w-8 h-8 rounded-full bg-green-100 flex items-center justify-center">
-                <CheckCircle class="w-5 h-5 text-green-600" />
-              </div>
-              <div class="ml-12">
-                <h3 class="text-sm font-medium text-gray-900">{{ $t('task.taskCreated') }}</h3>
-                <p class="mt-1 text-sm text-gray-500">{{ formatDateTime(task.created_at) }}</p>
-              </div>
+      <div v-else class="h-full flex flex-col">
+        <div :class="['flex-1 min-h-0 grid gap-4 h-full', layoutMode === 'split' ? 'grid-cols-2' : 'grid-cols-1']">
+          
+          <div v-if="layoutMode === 'split'" class="card p-0 overflow-hidden flex flex-col h-full border-r border-gray-200">
+            <div class="bg-gray-50 px-3 py-2 border-b border-gray-200 flex justify-between items-center flex-shrink-0">
+              <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">源文档 / 布局预览</span>
+              <a v-if="pdfUrl" :href="pdfUrl" target="_blank" class="text-xs text-primary-600 hover:underline">新窗口打开</a>
             </div>
-
-            <!-- 处理中 -->
-            <div class="relative flex items-start">
-              <div :class="task.started_at ? 'bg-green-100' : 'bg-gray-100'" class="absolute left-0 w-8 h-8 rounded-full flex items-center justify-center">
-                <component
-                  :is="task.started_at ? CheckCircle : Circle"
-                  :class="task.started_at ? 'text-green-600' : 'text-gray-400'"
-                  class="w-5 h-5"
-                />
-              </div>
-              <div class="ml-12">
-                <h3 class="text-sm font-medium text-gray-900">{{ $t('task.startProcessing') }}</h3>
-                <p class="mt-1 text-sm text-gray-500">{{ formatDateTime(task.started_at) }}</p>
-              </div>
-            </div>
-
-            <!-- 完成 -->
-            <div class="relative flex items-start">
-              <div
-                :class="task.completed_at ? (task.status === 'completed' ? 'bg-green-100' : 'bg-red-100') : 'bg-gray-100'"
-                class="absolute left-0 w-8 h-8 rounded-full flex items-center justify-center"
-              >
-                <component
-                  :is="task.completed_at ? (task.status === 'completed' ? CheckCircle : XCircle) : Circle"
-                  :class="task.completed_at ? (task.status === 'completed' ? 'text-green-600' : 'text-red-600') : 'text-gray-400'"
-                  class="w-5 h-5"
-                />
-              </div>
-              <div class="ml-12">
-                <h3 class="text-sm font-medium text-gray-900">
-                  {{ task.status === 'completed' ? $t('task.completed') : task.status === 'failed' ? $t('task.failed') : $t('task.waitingToComplete') }}
-                </h3>
-                <p class="mt-1 text-sm text-gray-500">{{ formatDateTime(task.completed_at) }}</p>
+            <div class="flex-1 bg-gray-200 relative">
+              <iframe 
+                v-if="pdfUrl" 
+                :src="pdfUrl" 
+                class="absolute inset-0 w-full h-full"
+                frameborder="0"
+              ></iframe>
+              <div v-else class="absolute inset-0 flex items-center justify-center text-gray-400">
+                暂无预览文件
               </div>
             </div>
           </div>
-        </div>
-      </div>
 
-      <!-- Markdown 预览 -->
-      <div v-if="task.status === 'completed' && task.data" class="card">
-        <div class="flex items-center justify-between mb-4">
-          <h2 class="text-lg font-semibold text-gray-900">{{ $t('task.parseResult') }}</h2>
-          <div class="flex items-center gap-4">
-            <!-- Format Tabs (for all backends that support JSON) -->
-            <div v-if="task.data.json_available !== false" class="flex items-center gap-2">
-              <button
-                @click="switchTab('markdown')"
-                :disabled="switchingFormat"
-                :class="[
-                  'px-3 py-1 text-sm rounded transition-colors',
-                  activeTab === 'markdown'
-                    ? 'bg-primary-100 text-primary-700 font-medium'
-                    : 'text-gray-600 hover:bg-gray-100',
-                  switchingFormat ? 'opacity-50 cursor-not-allowed' : ''
-                ]"
-              >
-                Markdown
-              </button>
-              <button
-                @click="switchTab('json')"
-                :disabled="switchingFormat"
-                :class="[
-                  'px-3 py-1 text-sm rounded transition-colors flex items-center gap-1',
-                  activeTab === 'json'
-                    ? 'bg-primary-100 text-primary-700 font-medium'
-                    : 'text-gray-600 hover:bg-gray-100',
-                  switchingFormat ? 'opacity-50 cursor-not-allowed' : ''
-                ]"
-              >
-                <Loader v-if="switchingFormat && activeTab !== 'json'" class="w-3 h-3 animate-spin" />
-                JSON
+          <div class="card p-0 overflow-hidden flex flex-col h-full">
+            <div class="bg-gray-50 px-3 py-2 border-b border-gray-200 flex justify-between items-center flex-shrink-0">
+              <div class="flex items-center gap-2">
+                 <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider mr-2">解析结果</span>
+                 <div class="flex items-center bg-gray-200 rounded p-0.5">
+                    <button 
+                      @click="switchTab('markdown')" 
+                      :class="['text-xs px-2 py-0.5 rounded transition-all', activeTab==='markdown' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500']"
+                    >Markdown</button>
+                    <button 
+                      @click="switchTab('json')" 
+                      :class="['text-xs px-2 py-0.5 rounded transition-all', activeTab==='json' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500']"
+                    >JSON</button>
+                 </div>
+              </div>
+              <button @click="downloadMarkdown" class="text-xs text-primary-600 hover:underline flex items-center">
+                <Download class="w-3 h-3 mr-1"/> 下载
               </button>
             </div>
-            <div class="flex items-center gap-2 text-sm text-gray-500">
-              <FileText class="w-4 h-4" />
-              {{ activeTab === 'json' && task.data.json_file ? task.data.json_file : task.data.markdown_file }}
+            
+            <div class="flex-1 overflow-auto bg-white relative custom-scrollbar">
+               <div v-show="activeTab === 'markdown'" class="p-6">
+                  <MarkdownViewer v-if="task.data?.content" :content="task.data.content" />
+                  <div v-else class="text-center py-10 text-gray-400">无 Markdown 内容</div>
+               </div>
+               <div v-show="activeTab === 'json'" class="p-0 h-full">
+                  <JsonViewer 
+                    v-if="task.data?.json_content" 
+                    :data="task.data.json_content" 
+                    class="h-full overflow-auto p-4"
+                  />
+                  <div v-else class="text-center py-10 text-gray-400">无 JSON 数据</div>
+               </div>
             </div>
           </div>
-        </div>
 
-        <!-- Markdown View -->
-        <div v-show="activeTab === 'markdown'">
-          <MarkdownViewer v-if="task.data.content" :content="task.data.content" />
-          <div v-else class="text-center py-8 text-gray-500">
-            <p>{{ $t('task.noMarkdownContent') }}</p>
-          </div>
-        </div>
-
-        <!-- JSON View -->
-        <div v-show="activeTab === 'json'">
-          <!-- 加载中 -->
-          <div v-if="switchingFormat" class="flex items-center justify-center py-12">
-            <Loader class="w-8 h-8 text-primary-600 animate-spin" />
-            <span class="ml-3 text-gray-600">{{ $t('task.loadingJsonData') }}</span>
-          </div>
-
-          <!-- JSON 内容 -->
-          <JsonViewer
-            v-else-if="task.data.json_content"
-            :data="task.data.json_content"
-            :file-name="task.data.json_file || `${task.task_id}.json`"
-          />
-
-          <!-- 无 JSON 内容 -->
-          <div v-else class="text-center py-12">
-            <div class="inline-flex items-center justify-center w-16 h-16 bg-gray-100 rounded-full mb-4">
-              <FileText class="w-8 h-8 text-gray-400" />
-            </div>
-            <p class="text-gray-600 mb-2">{{ $t('task.jsonNotAvailable') }}</p>
-            <p class="text-sm text-gray-500">{{ $t('task.jsonNotSupported') }}</p>
-          </div>
-        </div>
-      </div>
-
-      <!-- 处理中提示 -->
-      <div v-if="task.status === 'processing'" class="card bg-yellow-50 border-yellow-200">
-        <div class="flex items-center">
-          <Loader class="w-6 h-6 text-yellow-600 animate-spin" />
-          <div class="ml-3">
-            <h3 class="text-sm font-medium text-yellow-800">{{ $t('task.taskProcessing') }}</h3>
-            <p class="mt-1 text-sm text-yellow-700">{{ $t('task.autoRefresh') }}</p>
-          </div>
-        </div>
-      </div>
-
-      <!-- 等待中提示 -->
-      <div v-if="task.status === 'pending'" class="card bg-gray-50 border-gray-200">
-        <div class="flex items-center">
-          <Clock class="w-6 h-6 text-gray-600" />
-          <div class="ml-3">
-            <h3 class="text-sm font-medium text-gray-800">{{ $t('task.taskWaiting') }}</h3>
-            <p class="mt-1 text-sm text-gray-700">{{ $t('task.waitingInQueue') }}</p>
-          </div>
         </div>
       </div>
     </div>
@@ -279,49 +125,45 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useTaskStore } from '@/stores'
-
-const { t: $t } = useI18n()
-const activeTab = ref<'markdown' | 'json'>('markdown')
-const switchingFormat = ref(false)
-
-import { formatDateTime, formatDuration, formatBackendName } from '@/utils/format'
+import {
+  ArrowLeft, AlertCircle, RefreshCw, FileText, 
+  Columns, Download, Loader
+} from 'lucide-vue-next'
 import StatusBadge from '@/components/StatusBadge.vue'
 import LoadingSpinner from '@/components/LoadingSpinner.vue'
 import MarkdownViewer from '@/components/MarkdownViewer.vue'
 import JsonViewer from '@/components/JsonViewer.vue'
-import {
-  ArrowLeft,
-  AlertCircle,
-  CheckCircle,
-  XCircle,
-  Circle,
-  X,
-  Download,
-  RefreshCw,
-  FileText,
-  Loader,
-  Clock,
-} from 'lucide-vue-next'
 
+const { t: $t } = useI18n()
 const route = useRoute()
-const router = useRouter()
 const taskStore = useTaskStore()
 
 const taskId = computed(() => route.params.id as string)
 const task = computed(() => taskStore.currentTask)
 const loading = ref(false)
 const error = ref('')
-const cancelling = ref(false)
+
+const activeTab = ref<'markdown' | 'json'>('markdown')
+const layoutMode = ref<'single' | 'split'>('split') // 默认开启分屏
+
+// 计算 PDF 的 URL
+const pdfUrl = computed(() => {
+  if (!task.value?.data?.pdf_path) return null
+  // 必须对路径进行编码，处理中文文件名
+  const encodedPath = encodeURIComponent(task.value.data.pdf_path)
+  return `/api/v1/files/output/${encodedPath}`
+})
+
 let stopPolling: (() => void) | null = null
 
 async function refreshTask(format: 'markdown' | 'json' | 'both' = 'markdown') {
   loading.value = true
   error.value = ''
   try {
-    await taskStore.fetchTaskStatus(taskId.value, false, format)
+    await taskStore.fetchTaskStatus(taskId.value, false, 'both') // 强制获取 both 以便支持 tab 切换
   } catch (err: any) {
     error.value = err.message || $t('task.loadFailed')
   } finally {
@@ -329,46 +171,12 @@ async function refreshTask(format: 'markdown' | 'json' | 'both' = 'markdown') {
   }
 }
 
-async function switchTab(tab: 'markdown' | 'json') {
-  if (activeTab.value === tab) return
-
-  // 如果切换到 JSON，但当前没有 JSON 数据，则重新请求
-  if (tab === 'json' && !task.value?.data?.json_content) {
-    console.log('切换到 JSON，当前无数据，开始加载...')
-    switchingFormat.value = true
-    try {
-      await taskStore.fetchTaskStatus(taskId.value, false, 'both')
-      console.log('JSON 数据加载成功:', task.value?.data?.json_content ? '有数据' : '无数据')
-    } catch (err: any) {
-      console.error('加载 JSON 失败:', err)
-      error.value = err.message || '加载 JSON 数据失败'
-      return // 加载失败，不切换标签
-    } finally {
-      switchingFormat.value = false
-    }
-  }
-
+function switchTab(tab: 'markdown' | 'json') {
   activeTab.value = tab
-  console.log('切换到标签:', tab)
-}
-
-async function handleCancel() {
-  if (!confirm($t('task.confirmCancel'))) return
-
-  cancelling.value = true
-  try {
-    await taskStore.cancelTask(taskId.value)
-    await refreshTask()
-  } catch (err: any) {
-    alert(`${$t('task.cancelFailed')}: ${err.message}`)
-  } finally {
-    cancelling.value = false
-  }
 }
 
 function downloadMarkdown() {
   if (!task.value?.data?.content) return
-
   const blob = new Blob([task.value.data.content], { type: 'text/markdown' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
@@ -379,29 +187,37 @@ function downloadMarkdown() {
 }
 
 onMounted(async () => {
-  // 首次加载时，如果是支持 JSON 的引擎，预加载两种格式
-  const initialFormat: 'markdown' | 'json' | 'both' = 'markdown'
-  await refreshTask(initialFormat)
-
-  // 如果任务未完成，启动轮询
-  if (task.value && (task.value.status === 'pending' || task.value.status === 'processing')) {
+  await refreshTask('both')
+  
+  // 自动轮询
+  if (task.value && ['pending', 'processing'].includes(task.value.status)) {
     stopPolling = taskStore.pollTaskStatus(taskId.value, 2000, async (updatedTask) => {
-      // 轮询回调
-      if (updatedTask.status === 'completed' || updatedTask.status === 'failed') {
-        // 任务完成，停止轮询
-        if (stopPolling) {
-          stopPolling()
-          stopPolling = null
-        }
+      if (['completed', 'failed'].includes(updatedTask.status)) {
+        if (stopPolling) stopPolling()
       }
     })
   }
 })
 
 onUnmounted(() => {
-  if (stopPolling) {
-    stopPolling()
-    stopPolling = null
-  }
+  if (stopPolling) stopPolling()
 })
 </script>
+
+<style scoped>
+/* 自定义滚动条样式，防止双滚动条太丑 */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #a8a8a8;
+}
+</style>
