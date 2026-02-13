@@ -179,7 +179,7 @@ services:
       --trust-remote-code
       --host 0.0.0.0
       --port 30023
-      --gpu-memory-utilization 0.9
+      --gpu-memory-utilization 0.6
       --max-model-len 16384
       --enforce-eager
     # vLLM 需要较大的共享内存
@@ -219,7 +219,7 @@ services:
       --trust-remote-code
       --host 0.0.0.0
       --port 30024
-      --gpu-memory-utilization 0.9
+      --gpu-memory-utilization 0.6
       --max-model-len 8192
       --enforce-eager
     # vLLM 需要较大的共享内存
@@ -241,6 +241,8 @@ services:
   worker:
     image: tianshu-backend:latest
     container_name: tianshu-worker
+    # ⚠️ 关键：使用 root 用户运行以确保能访问 /var/run/docker.sock
+    user: root
     restart: unless-stopped
     command: [
       "worker",
