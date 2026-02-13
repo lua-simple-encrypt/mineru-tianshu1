@@ -1023,7 +1023,8 @@ class MinerUWorkerAPI(ls.LitAPI):
 
             # 注意：由于在 setup() 中已设置 CUDA_VISIBLE_DEVICES，
             # 该进程只能看到一个 GPU（映射为 cuda:0）
-            self.paddleocr_vl_engine = PaddleOCRVLEngine(device="cuda:0")
+            # 【关键修改】指定模型名称，匹配本地下载的目录
+            self.paddleocr_vl_engine = PaddleOCRVLEngine(device="cuda:0", model_name="PaddleOCR-VL-1.5-0.9B")
             gpu_id = os.environ.get("CUDA_VISIBLE_DEVICES", "?")
             logger.info(f"✅ PaddleOCR-VL engine loaded on cuda:0 (physical GPU {gpu_id})")
 
@@ -1055,8 +1056,11 @@ class MinerUWorkerAPI(ls.LitAPI):
 
             # 注意：由于在 setup() 中已设置 CUDA_VISIBLE_DEVICES，
             # 该进程只能看到一个 GPU（映射为 cuda:0）
+            # 【关键修改】指定模型名称
             self.paddleocr_vl_vllm_engine = PaddleOCRVLVLLMEngine(
-                device="cuda:0", vllm_api_base=self.paddleocr_vl_vllm_api
+                device="cuda:0", 
+                vllm_api_base=self.paddleocr_vl_vllm_api,
+                model_name="PaddleOCR-VL-1.5-0.9B"
             )
             gpu_id = os.environ.get("CUDA_VISIBLE_DEVICES", "?")
             logger.info(f"✅ PaddleOCR-VL VLLM engine loaded on cuda:0 (physical GPU {gpu_id})")
