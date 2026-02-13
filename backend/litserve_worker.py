@@ -18,6 +18,7 @@ import atexit
 from pathlib import Path
 from typing import Optional
 import multiprocessing
+import requests
 
 # Fix litserve MCP compatibility with mcp>=1.1.0
 # Completely disable LitServe's internal MCP to avoid conflicts with our standalone MCP Server
@@ -168,6 +169,75 @@ except ImportError as e:
     logger.info(f"ℹ️  Format engines not available (optional): {e}")
 
 
+# ==============================================================================
+# VLLM Container Controller (新增)
+# ==============================================================================
+class VLLMController:
+    """管理 vLLM Docker 容器的按需启动和关闭"""
+    def __init__(self):
+        self.docker_client = None
+        try:
+            import docker
+            # 连接到挂载的 /var/run/docker.sock
+            self.docker_client = docker.from_env()
+            logger.info("🐳 Docker client initialized successfully")
+        except Exception as e:
+            logger.warning(f"⚠️  Docker client init failed (Manual start/stop disabled): {e}")
+
+    def start_container(self, container_name: str, health_url: str, timeout: int = 300):
+        """启动容器并等待健康检查通过"""
+        if not self.docker_client:
+            return
+        
+        try:
+            container = self.docker_client.containers.get(container_name)
+            if container.status == 'running':
+                logger.info(f"✅ Container {container_name} is already running")
+            else:
+                logger.info(f"🚀 Starting container {container_name}...")
+                container.start()
+            
+            # 等待健康检查
+            self._wait_for_health(health_url, timeout)
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to start container {container_name}: {e}")
+            raise RuntimeError(f"Failed to start dependent service {container_name}")
+
+    def stop_container(self, container_name: str):
+        """停止容器"""
+        if not self.docker_client:
+            return
+            
+        try:
+            container = self.docker_client.containers.get(container_name)
+            if container.status == 'running':
+                logger.info(f"🛑 Stopping container {container_name}...")
+                container.stop()
+                logger.info(f"✅ Container {container_name} stopped")
+        except Exception as e:
+            logger.warning(f"⚠️  Failed to stop container {container_name}: {e}")
+
+    def _wait_for_health(self, url: str, timeout: int):
+        """轮询健康检查接口"""
+        start_time = time.time()
+        logger.info(f"⏳ Waiting for service at {url} (timeout: {timeout}s)...")
+        
+        while time.time() - start_time < timeout:
+            try:
+                # 显式使用 host.docker.internal 或者是 Docker DNS 名
+                response = requests.get(url, timeout=2)
+                if response.status_code == 200:
+                    logger.info(f"✅ Service is ready: {url}")
+                    return
+            except Exception:
+                pass
+            
+            time.sleep(2) # 每2秒重试一次
+        
+        raise TimeoutError(f"Service at {url} did not become ready in {timeout} seconds")
+
+
 class MinerUWorkerAPI(ls.LitAPI):
     def __init__(
         self,
@@ -195,6 +265,9 @@ class MinerUWorkerAPI(ls.LitAPI):
         ctx = multiprocessing.get_context("spawn")
         self._global_worker_counter = ctx.Value("i", 0)
 
+        # 初始化 Docker 控制器
+        self.vllm_controller = VLLMController()
+
     def setup(self, device):
         """
         初始化 Worker (每个 GPU 上调用一次)
@@ -217,7 +290,7 @@ class MinerUWorkerAPI(ls.LitAPI):
             self.paddleocr_vl_vllm_api = None
             logger.info(f"🔧 Worker #{my_global_index} assigned Paddle OCR VL API: None")
 
-        # 2. 分配 MinerU VLLM API
+        # 2. 分配 MinerU VLLM API (新增)
         if len(self.mineru_vllm_api_list) > 0:
             assigned_mineru_api = self.mineru_vllm_api_list[my_global_index % len(self.mineru_vllm_api_list)]
             self.mineru_vllm_api = assigned_mineru_api
@@ -531,10 +604,28 @@ class MinerUWorkerAPI(ls.LitAPI):
         file_path = task["file_path"]
         options = json.loads(task.get("options", "{}"))
         parent_task_id = task.get("parent_task_id")
+        backend = task.get("backend", "auto")
+        
+        container_to_manage = None
+        health_check_url = None
 
         try:
-            # 根据 backend 选择处理方式（从 task 字段读取，不是从 options 读取）
-            backend = task.get("backend", "auto")
+            # 1. 判断是否需要启动外部 vLLM 容器
+            if backend == "paddleocr-vl-vllm" and self.paddleocr_vl_vllm_api:
+                container_to_manage = "tianshu-vllm-paddleocr"
+                # 从 API 地址 http://vllm-paddleocr:30023/v1 推导 health url
+                base = self.paddleocr_vl_vllm_api.replace("/v1", "")
+                health_check_url = f"{base}/health"
+                
+            elif backend in ["vlm-auto-engine", "hybrid-auto-engine"] and self.mineru_vllm_api:
+                container_to_manage = "tianshu-vllm-mineru"
+                base = self.mineru_vllm_api.replace("/v1", "")
+                health_check_url = f"{base}/health"
+
+            # 2. 如果需要，启动容器
+            if container_to_manage:
+                logger.info(f"🔌 Auto-starting required service: {container_to_manage}")
+                self.vllm_controller.start_container(container_to_manage, health_check_url)
 
             # 检查文件扩展名
             file_ext = Path(file_path).suffix.lower()
@@ -727,6 +818,12 @@ class MinerUWorkerAPI(ls.LitAPI):
                 self.task_db.on_child_task_failed(task_id, error_msg)
 
             raise
+
+        finally:
+            # 4. 任务结束后关闭容器
+            if container_to_manage:
+                logger.info(f"🔌 Auto-stopping service: {container_to_manage}")
+                self.vllm_controller.stop_container(container_to_manage)
 
     def _process_with_mineru(self, file_path: str, options: dict) -> dict:
         """
