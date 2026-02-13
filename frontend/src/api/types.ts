@@ -91,9 +91,11 @@ export type TaskStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'ca
 // 后端类型
 export type Backend =
   | 'auto'  // 自动选择引擎
-  | 'pipeline'
-  | 'vlm-transformers'
-  | 'vlm-vllm-engine'
+  | 'pipeline' // MinerU Pipeline (传统多模型管道)
+  | 'vlm-auto-engine' // MinerU VLM 自动 (视觉大模型)
+  | 'hybrid-auto-engine' // MinerU 混合高精度
+  | 'vlm-transformers' // (保留旧的，视情况可弃用)
+  | 'vlm-vllm-engine'  // (保留旧的，视情况可弃用)
   | 'paddleocr-vl'
   | 'paddleocr-vl-vllm'
   | 'sensevoice'
