@@ -60,6 +60,28 @@ services:
       - tianshu-network
 
   # ============================================================================
+  # Model Initializer (自动下载模型)
+  # ============================================================================
+  init-models:
+    image: tianshu-backend:latest
+    container_name: tianshu-init-models
+    # 覆盖入口点，直接运行下载脚本
+    entrypoint: ["python", "download_models.py", "--output", "/app/models"]
+    volumes:
+      # 挂载模型目录 (RW)
+      - ./models:/app/models:rw
+      # 挂载配置文件 (RW)，以便脚本生成 magic-pdf.json
+      # 注意：请确保宿主机上已存在 magic-pdf.json 文件（哪怕是空的），否则 Docker 会创建为目录
+      - ./magic-pdf.json:/app/magic-pdf.json:rw
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      - TZ=Asia/Shanghai
+      - MODEL_DOWNLOAD_SOURCE=${MODEL_DOWNLOAD_SOURCE:-auto}
+      - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
+    networks:
+      - tianshu-network
+
+  # ============================================================================
   # Backend API Server (【唯一】负责构建镜像的服务)
   # ============================================================================
   backend:
@@ -130,6 +152,7 @@ services:
       - tianshu-network
     depends_on:
       - rustfs
+      - init-models
 
   # ============================================================================
   # vLLM Service - PaddleOCR Fix (PaddleOCR-VL-1.5)
@@ -174,6 +197,9 @@ services:
       start_period: 60s
     networks:
       - tianshu-network
+    depends_on:
+      init-models:
+        condition: service_completed_successfully
 
   # ============================================================================
   # vLLM Service - MinerU (MinerU-1.2B)
@@ -218,6 +244,9 @@ services:
       start_period: 60s
     networks:
       - tianshu-network
+    depends_on:
+      init-models:
+        condition: service_completed_successfully
 
   # ============================================================================
   # LitServe GPU Worker (复用 Backend 镜像)
@@ -298,10 +327,16 @@ services:
     networks:
       - tianshu-network
     depends_on:
-      - rustfs
-      - backend
-      - vllm-paddleocr
-      - vllm-mineru
+      rustfs:
+        condition: service_started
+      backend:
+        condition: service_started
+      init-models:
+        condition: service_completed_successfully
+      vllm-paddleocr:
+        condition: service_started
+      vllm-mineru:
+        condition: service_started
 
   # ============================================================================
   # MCP Server (复用 Backend 镜像)
