@@ -192,6 +192,10 @@ async def submit_task(
     method: str = Form("auto", description="解析方法: auto/txt/ocr"),
     formula_enable: bool = Form(True, description="是否启用公式识别"),
     table_enable: bool = Form(True, description="是否启用表格识别"),
+    # 新增 MinerU 高级选项
+    draw_layout: bool = Form(True, description="是否绘制布局边框（PDF调试）"),
+    draw_span: bool = Form(True, description="是否绘制文本Span边框（PDF调试）"),
+    
     priority: int = Form(0, description="优先级，数字越大越优先"),
     # 视频处理专用参数
     keep_audio: bool = Form(False, description="视频处理时是否保留提取的音频文件"),
@@ -249,6 +253,8 @@ async def submit_task(
             "method": method,
             "formula_enable": formula_enable,
             "table_enable": table_enable,
+            "draw_layout": draw_layout,  # 传递给 Worker
+            "draw_span": draw_span,      # 传递给 Worker
             # 视频处理参数
             "keep_audio": keep_audio,
             "enable_keyframe_ocr": enable_keyframe_ocr,
