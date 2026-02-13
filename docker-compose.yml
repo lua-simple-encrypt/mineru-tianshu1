@@ -1,11 +1,11 @@
 # Tianshu (天枢) - Production Docker Compose
-# 企业级 AI 数据预处理平台完整编排
+# 模式：相对路径挂载 (无需 .env，自动识别盘符)
 
 name: tianshu
 
 services:
   # ============================================================================
-  # Redis (高性能任务队列 - 可选)
+  # Redis
   # ============================================================================
   redis:
     image: redis:7-alpine
@@ -22,17 +22,11 @@ services:
     environment:
       - TZ=Asia/Shanghai
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
     networks:
       - tianshu-network
 
   # ============================================================================
-  # RustFS Object Storage (S3 Compatible)
+  # RustFS
   # ============================================================================
   rustfs:
     image: rustfs/rustfs:latest
@@ -50,27 +44,20 @@ services:
       - TZ=Asia/Shanghai
       - RUSTFS_ROOT_USER=${RUSTFS_ACCESS_KEY:-rustfsadmin}
       - RUSTFS_ROOT_PASSWORD=${RUSTFS_SECRET_KEY:-rustfsadmin}
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
     networks:
       - tianshu-network
 
   # ============================================================================
-  # Model Initializer (自动下载模型)
+  # Model Initializer (初始化下载)
   # ============================================================================
   init-models:
     image: tianshu-backend:latest
     container_name: tianshu-init-models
-    # 覆盖入口点，直接运行下载脚本
     entrypoint: ["python", "download_models.py", "--output", "/app/models"]
     volumes:
-      # 挂载模型目录 (RW)
+      # ✅ [核心修改] 使用相对路径 ./models
+      # 含义：将当前项目下的 models 文件夹，挂载到容器内的 /app/models
       - ./models:/app/models:rw
-      # 挂载配置文件 (RW)，以便脚本生成 magic-pdf.json
       - ./magic-pdf.json:/app/magic-pdf.json:rw
       - /etc/localtime:/etc/localtime:ro
     environment:
@@ -81,7 +68,7 @@ services:
       - tianshu-network
 
   # ============================================================================
-  # Backend API Server
+  # Backend API
   # ============================================================================
   backend:
     build:
@@ -95,6 +82,7 @@ services:
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
+      # ✅ [核心修改] 相对路径挂载
       - ./models:/app/models:rw
       - ./magic-pdf.json:/root/magic-pdf.json:ro
       - ./input:/app/data/uploads:rw
@@ -109,12 +97,8 @@ services:
       - API_PORT=8000
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY}
-      - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
-      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
-      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:80}
       - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
       - WORKER_URL=${WORKER_URL:-http://worker:8001}
-      - MAX_FILE_SIZE=${MAX_FILE_SIZE:-0}
       - MODEL_PATH=/app/models
       - OUTPUT_PATH=/app/data/output
       - UPLOAD_PATH=/app/data/uploads
@@ -124,16 +108,9 @@ services:
       - RUSTFS_ACCESS_KEY=${RUSTFS_ACCESS_KEY:-rustfsadmin}
       - RUSTFS_SECRET_KEY=${RUSTFS_SECRET_KEY:-rustfsadmin}
       - RUSTFS_BUCKET=${RUSTFS_BUCKET:-ts-img}
-      - RUSTFS_SECURE=${RUSTFS_SECURE:-false}
       - RUSTFS_PUBLIC_URL=${RUSTFS_PUBLIC_URL}
       - MODEL_DOWNLOAD_SOURCE=${MODEL_DOWNLOAD_SOURCE:-auto}
       - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
-      - HF_TOKEN=${HF_TOKEN:-}
-      - REDIS_QUEUE_ENABLED=${REDIS_QUEUE_ENABLED:-false}
-      - REDIS_HOST=${REDIS_HOST:-redis}
-      - REDIS_PORT=${REDIS_PORT:-6379}
-      - REDIS_DB=${REDIS_DB:-0}
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
     deploy:
       resources:
         reservations:
@@ -141,12 +118,6 @@ services:
             - driver: nvidia
               count: ${GPU_COUNT:-1}
               capabilities: [gpu]
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
     networks:
       - tianshu-network
     depends_on:
@@ -154,18 +125,17 @@ services:
       - init-models
 
   # ============================================================================
-  # vLLM Service - PaddleOCR (默认启动)
-  # 优化：显存占用 0.7 (约16.8GB)，留出空间给 Worker
-  # 路径更新：指向 paddlex 子目录
+  # vLLM Service - PaddleOCR
   # ============================================================================
   vllm-paddleocr:
     image: vllm/vllm-openai:nightly
     container_name: tianshu-vllm-paddleocr
-    restart: unless-stopped  # ✅ 默认随系统启动
-    # profiles: ["manual"]  # ❌ 移除 Manual Profile，使其自动启动
+    restart: unless-stopped
     ports:
       - "30023:30023"
     volumes:
+      # ✅ [核心修改] 将本地 ./models 挂载到容器内的 /models
+      # 这样 vLLM 内部就能通过 /models/paddlex/... 找到文件
       - ./models:/models:ro
       - /etc/localtime:/etc/localtime:ro
     environment:
@@ -192,17 +162,17 @@ services:
       - tianshu-network
 
   # ============================================================================
-  # vLLM Service - MinerU (按需启动)
-  # 优化：显存占用 0.7，与 PaddleOCR 互斥运行
+  # vLLM Service - MinerU
   # ============================================================================
   vllm-mineru:
     image: vllm/vllm-openai:nightly
     container_name: tianshu-vllm-mineru
     restart: no
-    profiles: ["manual"] # ✅ 保持 Manual，默认不启动
+    profiles: ["manual"]
     ports:
       - "30024:30024"
     volumes:
+      # ✅ [核心修改] 相对路径挂载
       - ./models:/models:ro
       - /etc/localtime:/etc/localtime:ro
     environment:
@@ -229,12 +199,11 @@ services:
       - tianshu-network
 
   # ============================================================================
-  # Worker (Root权限 + Docker Socket)
+  # Worker
   # ============================================================================
   worker:
     image: tianshu-backend:latest
     container_name: tianshu-worker
-    # ⚠️ 关键：使用 root 用户运行以确保能访问 /var/run/docker.sock
     user: root
     restart: unless-stopped
     command: [
@@ -248,8 +217,8 @@ services:
     ports:
       - "${WORKER_PORT:-8001}:8001"
     volumes:
-      # ⚠️ 关键：挂载 Docker Socket，允许 Worker 控制兄弟容器（启动/停止 vLLM）
       - /var/run/docker.sock:/var/run/docker.sock
+      # ✅ [核心修改] 相对路径挂载
       - ./models:/app/models:rw
       - ./magic-pdf.json:/root/magic-pdf.json:ro
       - ./input:/app/data/uploads:rw
@@ -281,16 +250,13 @@ services:
       - RUSTFS_ACCESS_KEY=${RUSTFS_ACCESS_KEY:-rustfsadmin}
       - RUSTFS_SECRET_KEY=${RUSTFS_SECRET_KEY:-rustfsadmin}
       - RUSTFS_BUCKET=${RUSTFS_BUCKET:-ts-img}
-      - RUSTFS_SECURE=${RUSTFS_SECURE:-false}
       - RUSTFS_PUBLIC_URL=${RUSTFS_PUBLIC_URL}
       - REDIS_QUEUE_ENABLED=${REDIS_QUEUE_ENABLED:-false}
       - REDIS_HOST=${REDIS_HOST:-redis}
       - REDIS_PORT=${REDIS_PORT:-6379}
-      - REDIS_DB=${REDIS_DB:-0}
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
-      # ✅ 更新 PaddleX 缓存路径到 paddlex 子目录
-      - PADDLE_HOME=/app/models/paddlex/.paddleocr
-      - PADDLEX_HOME=/app/models/paddlex/.paddlex
+      # ✅ 配置缓存路径，指向挂载进来的目录
+      - PADDLE_HOME=/app/models/paddlex/.paddleocr_cache
+      - PADDLEX_HOME=/app/models/paddlex/.paddlex_cache
     mem_limit: ${WORKER_MEMORY_LIMIT:-16G}
     memswap_limit: ${WORKER_MEMORY_LIMIT:-16G}
     mem_reservation: ${WORKER_MEMORY_RESERVATION:-8G}
@@ -304,21 +270,15 @@ services:
             - driver: nvidia
               count: ${GPU_COUNT:-1}
               capabilities: [gpu]
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 120s
     networks:
       - tianshu-network
     depends_on:
       - rustfs
       - backend
-      - init-models # 确保模型已下载
+      - init-models
 
   # ============================================================================
-  # MCP Server (复用 Backend 镜像)
+  # MCP Server
   # ============================================================================
   mcp-server:
     image: tianshu-backend:latest
@@ -338,19 +298,13 @@ services:
       - MCP_PORT=8002
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - API_URL=${API_URL:-http://backend:8000}
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
     networks:
       - tianshu-network
     depends_on:
       - backend
 
   # ============================================================================
-  # Frontend (Vue 3 + Nginx)
+  # Frontend
   # ============================================================================
   frontend:
     build:
@@ -369,13 +323,6 @@ services:
     environment:
       - TZ=Asia/Shanghai
       - VITE_API_BASE_URL=${VITE_API_BASE_URL:-http://localhost:8000}
-      - NGINX_CLIENT_MAX_BODY_SIZE=${NGINX_CLIENT_MAX_BODY_SIZE:-0}
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost/"]
-      interval: 30s
-      timeout: 3s
-      retries: 3
-      start_period: 10s
     networks:
       - tianshu-network
     depends_on:
@@ -384,7 +331,6 @@ services:
 networks:
   tianshu-network:
     driver: bridge
-    name: tianshu-network
     ipam:
       driver: default
       config:
@@ -402,10 +348,7 @@ volumes:
     driver: local
   redis-data:
     driver: local
-    name: tianshu-redis-data
   rustfs-data:
     driver: local
-    name: tianshu-rustfs-data
   rustfs-logs:
     driver: local
-    name: tianshu-rustfs-logs
