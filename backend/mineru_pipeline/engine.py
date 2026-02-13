@@ -113,7 +113,7 @@ class MinerUPipelineEngine:
         Args:
             file_path: 输入文件路径
             output_path: 输出目录路径
-            options: 处理选项
+            options: 处理选项 (包含 'parse_mode')
 
         Returns:
             包含结果的字典
@@ -124,6 +124,14 @@ class MinerUPipelineEngine:
 
         file_stem = Path(file_path).stem
         file_ext = Path(file_path).suffix.lower()
+
+        # 获取解析模式，默认为 'pipeline'
+        # 支持: 'pipeline', 'vlm-auto-engine', 'hybrid-auto-engine' (也兼容 'auto' 映射)
+        parse_mode = options.get("parse_mode", "pipeline")
+        if parse_mode == "auto":
+            parse_mode = "pipeline"
+
+        logger.info(f"🚀 MinerU Engine starting with mode: {parse_mode}")
 
         # 加载管道 (do_parse 函数)
         do_parse_func = self._load_pipeline()
@@ -157,12 +165,16 @@ class MinerUPipelineEngine:
                 logger.info("🌐 Language set to 'ch' (MinerU doesn't support 'auto')")
 
             # 调用 MinerU (do_parse)
+            # 根据 MinerU 2.0+ 规范，支持 parse_method 参数
             do_parse_func(
                 pdf_file_names=[file_name],  # 文件名列表
                 pdf_bytes_list=[pdf_bytes],  # 文件字节列表
                 p_lang_list=[lang],  # 语言列表
                 output_dir=str(output_dir),  # 输出目录
                 output_format="md_json",  # 同时输出 Markdown 和 JSON
+                # 传递解析模式
+                parse_method=parse_mode, 
+                # 其他参数
                 end_page_id=options.get("end_page_id"),
                 layout_mode=options.get("layout_mode", True),
                 formula_enable=options.get("formula_enable", True),
