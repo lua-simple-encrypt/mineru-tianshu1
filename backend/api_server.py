@@ -15,7 +15,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import uvicorn
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query, Depends
@@ -75,7 +75,11 @@ auth_db = AuthDB()
 # 注册认证路由
 app.include_router(auth_router)
 
-# 配置输出目录（使用共享目录，Docker 环境可访问）
+# ==============================================================================
+# 目录配置 (Output & Upload)
+# ==============================================================================
+
+# 1. 配置输出目录（使用共享目录，Docker 环境可访问）
 output_path_env = os.getenv("OUTPUT_PATH")
 if output_path_env:
     OUTPUT_DIR = Path(output_path_env)
@@ -85,6 +89,17 @@ else:
     OUTPUT_DIR = PROJECT_ROOT / "data" / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 logger.info(f"📁 Output directory: {OUTPUT_DIR.resolve()}")
+
+# 2. 配置上传目录 (修改默认为 input)
+upload_path_env = os.getenv("UPLOAD_PATH")
+if upload_path_env:
+    UPLOAD_DIR = Path(upload_path_env)
+else:
+    # Docker 环境: /app/input (如果不设置环境变量)
+    # 本地环境: ./input (项目根目录下的 input 目录)
+    UPLOAD_DIR = PROJECT_ROOT / "input"
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+logger.info(f"📁 Upload directory: {UPLOAD_DIR.resolve()}")
 
 
 # 注意：此函数已废弃，Worker 已自动上传图片到 RustFS 并替换 URL
@@ -232,19 +247,11 @@ async def submit_task(
     立即返回 task_id，任务在后台异步处理。
     """
     try:
-        # 创建共享的上传目录（Backend 和 Worker 都能访问）
-        upload_path_env = os.getenv("UPLOAD_PATH")
-        if upload_path_env:
-            upload_dir = Path(upload_path_env)
-        else:
-            # Docker 环境: /app/uploads
-            # 本地环境: ./data/uploads
-            upload_dir = PROJECT_ROOT / "data" / "uploads"
-        upload_dir.mkdir(parents=True, exist_ok=True)
-
+        # 使用全局 UPLOAD_DIR
+        
         # 生成唯一的文件名（避免冲突）
         unique_filename = f"{uuid.uuid4().hex}_{file.filename}"
-        temp_file_path = upload_dir / unique_filename
+        temp_file_path = UPLOAD_DIR / unique_filename
 
         # 流式写入文件到磁盘，避免高内存使用
         with open(temp_file_path, "wb") as temp_file:
@@ -341,11 +348,26 @@ async def get_task_status(
         if task.get("user_id") != current_user.user_id:
             raise HTTPException(status_code=403, detail="Permission denied: You can only view your own tasks")
 
+    # === 构建源文件访问 URL ===
+    source_url = None
+    if task.get("file_path"):
+        try:
+            # 提取文件名 (task['file_path'] 是绝对路径)
+            source_filename = Path(task["file_path"]).name
+            # 编码文件名，防止中文乱码
+            encoded_source_filename = quote(source_filename)
+            # 生成 API 路径
+            source_url = f"/api/v1/files/input/{encoded_source_filename}"
+        except Exception as e:
+            logger.warning(f"Failed to generate source_url: {e}")
+    # =========================
+
     response = {
         "success": True,
         "task_id": task_id,
         "status": task["status"],
         "file_name": task["file_name"],
+        "source_url": source_url,  # 新增字段：源文件下载链接
         "backend": task["backend"],
         "priority": task["priority"],
         "error_message": task["error_message"],
@@ -803,7 +825,7 @@ async def serve_output_file(file_path: str):
     注意：Nginx 代理会去掉 /api/ 前缀，所以这里不需要 /api/
     """
     try:
-        logger.debug(f"📥 Received file request: {file_path}")
+        logger.debug(f"📥 Received output file request: {file_path}")
         # URL 解码
         decoded_path = unquote(file_path)
         logger.debug(f"📝 Decoded path: {decoded_path}")
@@ -837,7 +859,49 @@ async def serve_output_file(file_path: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/v1/files/input/{file_path:path}", tags=["文件服务"])
+async def serve_input_file(file_path: str):
+    """
+    提供上传源文件的访问服务 (用于前端预览源文件)
+
+    支持 URL 编码的中文路径
+    """
+    try:
+        logger.debug(f"📥 Received input file request: {file_path}")
+        # URL 解码
+        decoded_path = unquote(file_path)
+        # 构建完整路径
+        full_path = UPLOAD_DIR / decoded_path
+        logger.debug(f"📂 Full path: {full_path}")
+
+        # 安全检查：确保路径在 UPLOAD_DIR 内
+        try:
+            full_path = full_path.resolve()
+            UPLOAD_DIR.resolve()
+            if not str(full_path).startswith(str(UPLOAD_DIR.resolve())):
+                raise HTTPException(status_code=403, detail="Access denied")
+        except Exception:
+            raise HTTPException(status_code=403, detail="Invalid path")
+
+        # 检查文件是否存在
+        if not full_path.exists():
+            logger.warning(f"⚠️  Input file not found: {full_path}")
+            raise HTTPException(status_code=404, detail="File not found")
+
+        if not full_path.is_file():
+            raise HTTPException(status_code=404, detail="Not a file")
+
+        # 返回文件
+        return FileResponse(path=str(full_path), media_type="application/octet-stream", filename=full_path.name)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error serving input file: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 logger.info(f"📁 File service mounted: /v1/files/output -> {OUTPUT_DIR}")
+logger.info(f"📁 File service mounted: /v1/files/input  -> {UPLOAD_DIR}")
 logger.info("   Frontend can access images via: /api/v1/files/output/{task_id}/images/xxx.jpg (Nginx will strip /api/)")
 
 if __name__ == "__main__":
