@@ -116,6 +116,9 @@ export interface TaskOptions {
   formula_enable: boolean
   table_enable: boolean
   // 新增选项
+  start_page?: number
+  end_page?: number
+  force_ocr?: boolean
   draw_layout?: boolean
   draw_span?: boolean
 }
@@ -130,9 +133,14 @@ export interface SubmitTaskRequest {
   table_enable?: boolean
   priority?: number
   
+  // 页码范围 (新增)
+  start_page?: number
+  end_page?: number
+
   // MinerU 高级调试参数
   draw_layout?: boolean // 是否绘制布局边框
   draw_span?: boolean   // 是否绘制文本Span边框
+  force_ocr?: boolean   // 是否强制OCR
 
   // Video 专属参数
   keep_audio?: boolean
@@ -174,6 +182,7 @@ export interface Task {
     json_file?: string
     json_content?: any
     json_available?: boolean
+    pdf_path?: string // (新增) 用于分屏对比显示的 PDF 路径
   } | null
 }
 
@@ -209,6 +218,7 @@ export interface TaskStatusResponse {
     json_file?: string
     json_content?: any
     json_available?: boolean
+    pdf_path?: string // (新增) 用于分屏对比显示的 PDF 路径
   } | null
   message?: string
 }
