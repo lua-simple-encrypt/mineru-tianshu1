@@ -74,14 +74,14 @@ services:
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
+      # 1. 挂载模型目录 (容器内 /app/models 下就是 MinerU2.5 等文件夹)
       - ./models:/app/models:rw
-      - ./models/paddlex_cache:/root/.paddlex:rw
-      - ./models/huggingface_cache:/root/.cache/huggingface:rw
-      - ./models/modelscope_cache:/root/.cache/modelscope:rw
-      # 👇👇👇 修改开始：映射本地 input/output 文件夹 👇👇👇
+      # 2. 【关键】挂载配置文件 (告诉 MinerU 去哪里找模型)
+      - ./magic-pdf.json:/root/magic-pdf.json:ro
+      # 3. 映射本地输入输出文件夹
       - ./input:/app/data/uploads:rw
       - ./output:/app/data/output:rw
-      # 👆👆👆 修改结束 👆👆👆
+      # 4. 日志与数据库
       - ./logs/backend:/app/logs:rw
       - ./data/db:/app/data/db:rw
       - /etc/localtime:/etc/localtime:ro
@@ -152,14 +152,14 @@ services:
     ports:
       - "${WORKER_PORT:-8001}:8001"
     volumes:
+      # 1. 挂载模型目录
       - ./models:/app/models:rw
-      - ./models/paddlex_cache:/root/.paddlex:rw
-      - ./models/huggingface_cache:/root/.cache/huggingface:rw
-      - ./models/modelscope_cache:/root/.cache/modelscope:rw
-      # 👇👇👇 修改开始：映射本地 input/output 文件夹 (必须与 Backend 保持一致) 👇👇👇
+      # 2. 【关键】挂载配置文件 (告诉 MinerU 去哪里找模型)
+      - ./magic-pdf.json:/root/magic-pdf.json:ro
+      # 3. 映射本地输入输出文件夹 (必须与 Backend 保持一致)
       - ./input:/app/data/uploads:rw
       - ./output:/app/data/output:rw
-      # 👆👆👆 修改结束 👆👆👆
+      # 4. 日志与数据库
       - ./logs/worker:/app/logs:rw
       - ./data/db:/app/data/db:rw
       - /etc/localtime:/etc/localtime:ro
