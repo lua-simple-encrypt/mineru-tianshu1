@@ -23,7 +23,7 @@ logger.remove()
 logger.add(sys.stdout, format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>")
 
 # ==============================================================================
-# 模型配置清单
+# 模型配置清单 (严格参考官方结构)
 # ==============================================================================
 MODELS = {
     # -------------------------------------------------------------------------
@@ -50,21 +50,19 @@ MODELS = {
     # 2. PaddleX / PaddleOCR 模型 (全部归档到 paddlex/ 子目录)
     # -------------------------------------------------------------------------
     
-    # --- 多模态文档解析 ---
+    # --- 多模态文档解析 (修正为 HuggingFace 源) ---
     "paddleocr_vl_1_5": {
         "name": "PaddleOCR-VL-1.5-0.9B",
-        "repo_id": "PaddlePaddle/PaddleOCR-VL-1.5",
-        "source": "modelscope",
-        "model_id": "PaddlePaddle/PaddleOCR-VL-1.5-0.9B",
+        "repo_id": "PaddlePaddle/PaddleOCR-VL-1.5", # HF 源 ID
+        "source": "huggingface",
         "target_dir": "paddlex/PaddleOCR-VL-1.5-0.9B",
         "description": "多模态文档解析模型 v1.5",
         "required": True
     },
     "paddleocr_vl_0_9": {
         "name": "PaddleOCR-VL-0.9B",
-        "repo_id": "PaddlePaddle/PaddleOCR-VL-0.9B",
-        "source": "modelscope",
-        "model_id": "PaddlePaddle/PaddleOCR-VL-0.9B",
+        "repo_id": "PaddlePaddle/PaddleOCR-VL", # HF 源 ID (对应 0.9B 版本)
+        "source": "huggingface",
         "target_dir": "paddlex/PaddleOCR-VL-0.9B",
         "description": "多模态文档解析模型 v1.0",
         "required": False
@@ -346,8 +344,12 @@ def verify_model_files(path, model_name):
     # 3. Paddle Models (OCR, Layout, LCNet)
     elif "paddle" in model_name or "pp_" in model_name or "slanext" in model_name or "uvdoc" in model_name or "rtdetr" in model_name:
          # PaddleX 模型通常包含 inference.pdmodel 等文件
-         if not (any(path_obj.rglob("*.pdmodel")) or any(path_obj.rglob("*.pdiparams")) or any(path_obj.rglob("*.yaml"))):
-              logger.warning(f"   ⚠️  No Paddle inference files found in {path}")
+         # 放宽校验：只要包含 pdmodel, pdiparams, pdparams, yaml 中的任意一个，就认为有效
+         if not (any(path_obj.rglob("*.pdmodel")) or 
+                 any(path_obj.rglob("*.pdiparams")) or 
+                 any(path_obj.rglob("*.pdparams")) or 
+                 any(path_obj.rglob("*.yaml"))):
+              logger.warning(f"   ⚠️  No Paddle inference/weight files found in {path}")
               return False
               
     # 4. YOLO (单文件或目录)
