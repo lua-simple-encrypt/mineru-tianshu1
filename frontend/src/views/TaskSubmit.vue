@@ -1,463 +1,454 @@
 <template>
-  <div class="max-w-6xl mx-auto px-4 py-6 animate-fade-in">
-    <div class="mb-6 flex flex-col md:flex-row md:items-end justify-between gap-4">
+  <div class="max-w-5xl mx-auto px-4 py-6 animate-fade-in">
+    <div class="mb-6 flex justify-between items-end">
       <div>
-        <h1 class="text-2xl font-bold text-gray-900">{{ $t('task.taskList') }}</h1>
-        <p class="mt-1 text-sm text-gray-500">{{ $t('task.taskList') }}</p>
+        <h1 class="text-2xl font-bold text-gray-900 tracking-tight">{{ $t('task.submitTask') }}</h1>
+        <p class="mt-1 text-sm text-gray-500">{{ $t('task.processingOptions') }}</p>
       </div>
-      
-      <div class="flex flex-wrap items-center gap-3">
-        <label class="flex items-center cursor-pointer bg-white px-3 py-2 rounded-lg border border-gray-200 shadow-sm hover:bg-gray-50 transition-colors" title="开启后每5秒刷新一次">
-          <input type="checkbox" v-model="autoRefresh" class="sr-only">
-          <div class="relative w-8 h-4 transition-colors rounded-full" :class="autoRefresh ? 'bg-green-500' : 'bg-gray-300'">
-            <div class="absolute left-0.5 top-0.5 w-3 h-3 bg-white rounded-full transition-transform shadow-sm" :class="autoRefresh ? 'translate-x-4' : 'translate-x-0'"></div>
-          </div>
-          <span class="ml-2 text-xs font-medium text-gray-600 select-none">自动刷新</span>
-        </label>
-
-        <button
-          @click="refreshTasks(true)"
-          :disabled="loading"
-          class="btn btn-secondary btn-sm flex items-center shadow-sm"
-        >
-          <RefreshCw :class="{ 'animate-spin': loading }" class="w-4 h-4 mr-1.5" />
-          {{ $t('common.refresh') }}
-        </button>
-        
-        <router-link to="/tasks/submit" class="btn btn-primary btn-sm flex items-center shadow-sm">
-          <Plus class="w-4 h-4 mr-1.5" />
-          {{ $t('task.submitTask') }}
-        </router-link>
-      </div>
+      <button 
+        @click="resetConfig" 
+        class="text-xs text-gray-500 hover:text-primary-600 underline transition-colors flex items-center"
+        title="恢复默认设置"
+      >
+        <RotateCcw class="w-3 h-3 mr-1" />
+        {{ $t('common.reset') || '重置配置' }}
+      </button>
     </div>
 
-    <div class="card mb-6 shadow-sm border-gray-100">
-      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 p-1">
-        <div>
-          <label class="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">{{ $t('task.filterByStatus') }}</label>
-          <div class="relative">
-            <select
-              v-model="filters.status"
-              @change="applyFilters"
-              class="w-full pl-3 pr-8 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm appearance-none"
-            >
-              <option value="">{{ $t('task.allStatus') }}</option>
-              <option value="pending">{{ $t('status.pending') }}</option>
-              <option value="processing">{{ $t('status.processing') }}</option>
-              <option value="completed">{{ $t('status.completed') }}</option>
-              <option value="failed">{{ $t('status.failed') }}</option>
-              <option value="cancelled">{{ $t('status.cancelled') }}</option>
-            </select>
-            <Filter class="absolute right-2.5 top-2.5 w-4 h-4 text-gray-400 pointer-events-none" />
-          </div>
-        </div>
-
-        <div>
-          <label class="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">{{ $t('task.backend') }}</label>
-          <div class="relative">
-            <select
-              v-model="filters.backend"
-              @change="applyFilters"
-              class="w-full pl-3 pr-8 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm appearance-none"
-            >
-              <option value="">{{ $t('task.allStatus') }}</option>
-              <optgroup label="MinerU Documents">
-                <option value="pipeline">Pipeline (Standard)</option>
-                <option value="vlm-auto-engine">VLM Auto (Visual)</option>
-                <option value="hybrid-auto-engine">Hybrid (High Prec.)</option>
-              </optgroup>
-              <optgroup label="OCR / Text">
-                <option value="paddleocr-vl">PaddleOCR-VL</option>
-                <option value="paddleocr-vl-vllm">PaddleOCR-VL-VLLM</option>
-              </optgroup>
-              <optgroup label="Audio / Video">
-                <option value="sensevoice">SenseVoice (Audio)</option>
-                <option value="video">Video Processing</option>
-              </optgroup>
-              <optgroup label="Bio / Science">
-                <option value="fasta">FASTA</option>
-                <option value="genbank">GenBank</option>
-              </optgroup>
-            </select>
-            <Server class="absolute right-2.5 top-2.5 w-4 h-4 text-gray-400 pointer-events-none" />
-          </div>
-        </div>
-
-        <div class="sm:col-span-2">
-          <label class="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">{{ $t('common.search') }}</label>
-          <div class="relative">
-            <input
-              v-model="filters.search"
-              @input="applyFilters"
-              type="text"
-              :placeholder="$t('common.search') + ' (Filename / ID)'"
-              class="w-full pl-9 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm"
-            >
-            <Search class="absolute left-3 top-2.5 w-4 h-4 text-gray-400 pointer-events-none" />
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="card shadow-sm border-gray-100 overflow-hidden">
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
       
-      <div v-if="selectedTasks.length > 0" class="bg-blue-50 px-6 py-2 border-b border-blue-100 flex items-center justify-between transition-all animate-fade-in">
-        <div class="flex items-center text-blue-800 text-sm font-medium">
-          <CheckSquare class="w-4 h-4 mr-2" />
-          已选择 {{ selectedTasks.length }} 项
-        </div>
-        <div class="flex gap-2">
-          <button
-            @click="batchCancel"
-            class="text-red-600 hover:text-red-700 hover:bg-red-100 px-3 py-1.5 rounded-md text-xs font-medium transition-colors flex items-center"
-          >
-            <XCircle class="w-4 h-4 mr-1.5" />
-            批量取消
-          </button>
-          <button
-            @click="selectedTasks = []"
-            class="text-gray-500 hover:text-gray-700 hover:bg-white px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
-          >
-            取消选择
-          </button>
+      <div class="lg:col-span-5 order-2 lg:order-1">
+        <div class="card shadow-sm hover:shadow-md transition-shadow duration-200 h-full flex flex-col">
+          <div class="p-4 border-b border-gray-100 bg-gray-50 rounded-t-lg">
+            <h2 class="text-lg font-semibold text-gray-800 flex items-center">
+              <Upload class="w-5 h-5 mr-2 text-primary-600" />
+              {{ $t('task.selectFile') }}
+            </h2>
+          </div>
+          <div class="p-6 flex-1 flex flex-col">
+            <FileUploader
+              ref="fileUploader"
+              :multiple="true"
+              :acceptHint="$t('task.supportedFormatsHint')"
+              @update:files="onFilesChange"
+              class="flex-1"
+            />
+            
+            <div class="mt-6 pt-6 border-t border-gray-100">
+              <button
+                @click="submitTasks"
+                :disabled="files.length === 0 || submitting"
+                class="w-full btn btn-primary py-3 text-base font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center shadow-sm hover:shadow-md transition-all transform active:scale-[0.98]"
+              >
+                <Loader v-if="submitting" class="w-5 h-5 mr-2 animate-spin" />
+                <Send v-else class="w-5 h-5 mr-2" />
+                {{ submitting ? $t('common.loading') : `${$t('task.submitTask')} (${files.length})` }}
+              </button>
+              <p v-if="files.length === 0" class="text-center text-xs text-gray-400 mt-2">
+                请先选择文件
+              </p>
+            </div>
+          </div>
         </div>
       </div>
 
-      <div v-if="loading && tasks.length === 0" class="flex flex-col items-center justify-center py-20">
-        <LoadingSpinner size="lg" :text="$t('common.loading')" />
-      </div>
+      <div class="lg:col-span-7 order-1 lg:order-2">
+        <div class="card shadow-sm hover:shadow-md transition-shadow duration-200 bg-white">
+          <div class="p-4 border-b border-gray-100 bg-gray-50 rounded-t-lg flex justify-between items-center">
+            <h2 class="text-lg font-semibold text-gray-800 flex items-center">
+              <Settings class="w-5 h-5 mr-2 text-primary-600" />
+              {{ $t('task.processingOptions') }}
+            </h2>
+            <span class="px-2 py-1 bg-blue-50 text-blue-700 text-xs rounded border border-blue-100 font-mono">
+              {{ config.backend }}
+            </span>
+          </div>
+          
+          <div class="p-6 space-y-6">
+            
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
+               <button 
+                 v-for="preset in presets" 
+                 :key="preset.id"
+                 @click="applyPreset(preset)"
+                 :class="['p-2 rounded-lg border text-left transition-all relative overflow-hidden group', 
+                          currentPreset === preset.id ? 'border-primary-500 bg-primary-50 ring-1 ring-primary-500' : 'border-gray-200 hover:border-primary-300 hover:bg-gray-50']"
+               >
+                 <div class="text-xl mb-1">{{ preset.icon }}</div>
+                 <div class="text-xs font-bold text-gray-800">{{ preset.name }}</div>
+                 <div class="text-[10px] text-gray-500 leading-tight mt-0.5">{{ preset.desc }}</div>
+                 <div v-if="currentPreset === preset.id" class="absolute top-1 right-1 text-primary-600">
+                    <CheckCircle class="w-3 h-3" />
+                 </div>
+               </button>
+            </div>
 
-      <div v-else-if="filteredTasks.length === 0" class="flex flex-col items-center justify-center py-20 text-gray-500">
-        <div class="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mb-4">
-          <FileQuestion class="w-8 h-8 text-gray-400" />
-        </div>
-        <p class="text-lg font-medium text-gray-900">暂无任务</p>
-        <p class="text-sm mt-1">没有找到符合条件的任务记录</p>
-        <button @click="clearFilters" class="mt-4 text-primary-600 hover:text-primary-700 text-sm font-medium hover:underline">
-          清除筛选条件
-        </button>
-      </div>
+            <hr class="border-gray-100" />
 
-      <div v-else class="overflow-x-auto custom-scrollbar">
-        <table class="min-w-full divide-y divide-gray-200">
-          <thead class="bg-gray-50/50">
-            <tr>
-              <th scope="col" class="px-6 py-3 text-left w-10">
-                <input
-                  v-model="selectAll"
-                  @change="toggleSelectAll"
-                  type="checkbox"
-                  class="rounded border-gray-300 text-primary-600 focus:ring-primary-500 w-4 h-4 cursor-pointer"
-                />
-              </th>
-              <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                {{ $t('task.fileName') }}
-              </th>
-              <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                {{ $t('task.status') }}
-              </th>
-              <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                {{ $t('task.backend') }}
-              </th>
-              <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                时间信息
-              </th>
-              <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                {{ $t('task.actions') }}
-              </th>
-            </tr>
-          </thead>
-          <tbody class="bg-white divide-y divide-gray-100">
-            <tr
-              v-for="task in paginatedTasks"
-              :key="task.task_id"
-              :class="{'bg-blue-50/30': selectedTasks.includes(task.task_id)}"
-              class="hover:bg-gray-50/80 transition-colors group"
-            >
-              <td class="px-6 py-4 whitespace-nowrap">
-                <input
-                  v-model="selectedTasks"
-                  :value="task.task_id"
-                  type="checkbox"
-                  class="rounded border-gray-300 text-primary-600 focus:ring-primary-500 w-4 h-4 cursor-pointer"
-                />
-              </td>
-              <td class="px-6 py-4">
-                <div class="flex items-start">
-                  <div class="p-2 bg-gray-100 rounded-lg mr-3 group-hover:bg-white group-hover:shadow-sm transition-all">
-                    <FileText class="w-5 h-5 text-gray-500" />
-                  </div>
-                  <div class="min-w-0">
-                    <div class="text-sm font-medium text-gray-900 truncate max-w-[200px] sm:max-w-[300px]" :title="task.file_name">
-                      {{ task.file_name }}
-                    </div>
-                    <div class="text-xs text-gray-400 font-mono mt-0.5 flex items-center">
-                      {{ task.task_id }}
-                      <button @click="copyToClipboard(task.task_id)" class="ml-1.5 opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 hover:text-primary-600" title="复制 ID">
-                        <Copy class="w-3 h-3" />
-                      </button>
-                    </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <div class="col-span-1 md:col-span-2">
+                <label class="block text-sm font-bold text-gray-800 mb-1.5">解析后端 (Backend Engine)</label>
+                <div class="relative">
+                  <select
+                    v-model="config.backend"
+                    @change="onBackendChange"
+                    class="w-full pl-3 pr-8 py-3 bg-white border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 transition-colors text-sm font-medium shadow-sm"
+                  >
+                    <option value="auto">Auto (自动选择)</option>
+                    <optgroup label="MinerU Documents">
+                      <option value="vlm-auto-engine">MinerU VLM (多模态大模型高精度)</option>
+                      <option value="hybrid-auto-engine">MinerU Hybrid (高精度混合解析)</option>
+                      <option value="pipeline">Standard Pipeline (通用管道)</option>
+                    </optgroup>
+                    <optgroup label="Audio / Video / OCR">
+                      <option value="paddleocr-vl">PaddleOCR-VL</option>
+                      <option value="paddleocr-vl-vllm">PaddleOCR-VL-VLLM</option>
+                      <option value="sensevoice">SenseVoice (Audio)</option>
+                      <option value="video">Video Processing</option>
+                    </optgroup>
+                    <optgroup label="Professional Formats">
+                      <option value="fasta">FASTA</option>
+                      <option value="genbank">GenBank</option>
+                    </optgroup>
+                  </select>
+                  <div class="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
+                    <ChevronDown class="w-4 h-4 text-gray-500" />
                   </div>
                 </div>
-              </td>
-              <td class="px-6 py-4 whitespace-nowrap">
-                <StatusBadge :status="task.status" />
-              </td>
-              <td class="px-6 py-4 whitespace-nowrap">
-                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800 border border-gray-200">
-                  {{ formatBackendName(task.backend) }}
-                </span>
-              </td>
-              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                <div class="flex flex-col">
-                  <span>{{ formatRelativeTime(task.created_at) }}</span>
-                  <span v-if="task.completed_at" class="text-xs text-gray-400 mt-0.5">
-                    耗时: {{ formatDuration(task.created_at, task.completed_at) }}
-                  </span>
-                </div>
-              </td>
-              <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                <div class="flex items-center justify-end gap-2 opacity-60 group-hover:opacity-100 transition-opacity">
-                  <router-link
-                    :to="`/tasks/${task.task_id}`"
-                    class="text-gray-500 hover:text-primary-600 transition-colors p-1.5 rounded hover:bg-primary-50"
-                    title="查看详情"
-                  >
-                    <Eye class="w-4 h-4" />
-                  </router-link>
-                  
-                  <button
-                    v-if="task.status === 'pending'"
-                    @click="cancelTask(task.task_id)"
-                    class="text-gray-500 hover:text-red-600 transition-colors p-1.5 rounded hover:bg-red-50"
-                    title="取消任务"
-                  >
-                    <XCircle class="w-4 h-4" />
-                  </button>
-                  <span v-else class="w-7"></span>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+                <p class="mt-2 text-xs text-gray-600 bg-gray-50 p-2 rounded border border-gray-100 flex items-start">
+                  <Info class="w-3.5 h-3.5 mr-1.5 mt-0.5 text-primary-500 flex-shrink-0" />
+                  {{ backendDescription }}
+                </p>
+              </div>
 
-      <div v-if="filteredTasks.length > 0" class="bg-gray-50 px-6 py-4 border-t border-gray-200 flex items-center justify-between">
-        <div class="text-sm text-gray-500 hidden sm:block">
-          显示 {{ (currentPage - 1) * pageSize + 1 }} 到 {{ Math.min(currentPage * pageSize, filteredTasks.length) }} 条，共 {{ filteredTasks.length }} 条
-        </div>
-        <div class="flex gap-2 w-full sm:w-auto justify-between sm:justify-end">
-          <button
-            @click="currentPage--"
-            :disabled="currentPage === 1"
-            class="p-2 bg-white border border-gray-300 rounded-md text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-colors"
-          >
-            <ChevronLeft class="w-4 h-4" />
-          </button>
-          <div class="flex items-center px-4 bg-white border border-gray-200 rounded-md shadow-sm">
-            <span class="text-sm font-medium text-gray-700">{{ currentPage }}</span>
-            <span class="text-sm text-gray-400 mx-2">/</span>
-            <span class="text-sm text-gray-500">{{ totalPages }}</span>
+              <div v-if="showLanguageOption" class="col-span-1">
+                <label class="block text-sm font-medium text-gray-700 mb-1.5">{{ $t('task.language') }}</label>
+                <select v-model="config.lang" class="w-full px-3 py-2.5 bg-white border border-gray-300 rounded-lg text-sm">
+                  <option value="auto">{{ $t('task.langAuto') }}</option>
+                  <option value="ch">{{ $t('task.langChinese') }}</option>
+                  <option value="en">{{ $t('task.langEnglish') }}</option>
+                  <option value="korean">{{ $t('task.langKorean') }}</option>
+                  <option value="japan">{{ $t('task.langJapanese') }}</option>
+                </select>
+              </div>
+
+              <div v-if="showLanguageOption" class="col-span-1">
+                <label class="block text-sm font-medium text-gray-700 mb-1.5">{{ $t('task.priorityLabel') }}</label>
+                <input v-model.number="config.priority" type="number" min="0" max="100" class="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm" />
+              </div>
+            </div>
+
+            <div v-if="isMinerUBackend" class="pt-4 border-t border-gray-100">
+              <h3 class="text-sm font-bold text-gray-800 mb-3 flex items-center">
+                <ScanText class="w-4 h-4 mr-2 text-primary-600"/> 识别与解析控制
+              </h3>
+              
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="border border-gray-200 rounded-lg p-3 hover:bg-gray-50 transition-colors">
+                  <label class="flex items-center cursor-pointer mb-1">
+                    <input v-model="config.table_enable" type="checkbox" class="w-4 h-4 text-primary-600 rounded border-gray-300 focus:ring-primary-500" />
+                    <span class="ml-2 text-sm font-medium text-gray-900">启用表格识别</span>
+                  </label>
+                  <p class="text-xs text-gray-500 pl-6">禁用后，表格将显示为图片。</p>
+                </div>
+
+                <div class="border border-gray-200 rounded-lg p-3 hover:bg-gray-50 transition-colors">
+                  <label class="flex items-center cursor-pointer mb-1">
+                    <input v-model="config.formula_enable" type="checkbox" class="w-4 h-4 text-primary-600 rounded border-gray-300 focus:ring-primary-500" />
+                    <span class="ml-2 text-sm font-medium text-gray-900">{{ formulaLabel }}</span>
+                  </label>
+                  <p class="text-xs text-gray-500 pl-6">禁用后，{{ formulaDescription }}</p>
+                </div>
+
+                <div v-if="config.backend !== 'vlm-auto-engine'" class="border border-gray-200 rounded-lg p-3 hover:bg-gray-50 transition-colors md:col-span-2" :class="{'bg-orange-50 border-orange-200': config.force_ocr}">
+                  <label class="flex items-center cursor-pointer mb-1">
+                    <input v-model="config.force_ocr" type="checkbox" class="w-4 h-4 text-orange-500 rounded border-gray-300 focus:ring-orange-500" />
+                    <span class="ml-2 text-sm font-medium text-gray-900">强制启用 OCR <span v-if="config.force_ocr" class="text-orange-600 text-xs ml-2">(已启用)</span></span>
+                  </label>
+                  <p class="text-xs text-gray-500 pl-6">仅在识别效果极差（如模糊扫描件）时启用，需选择正确的 OCR 语言。</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="bg-gray-50 rounded-lg p-1 border border-gray-200">
+              <button @click="showAdvanced = !showAdvanced" class="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-100 transition-colors rounded-lg group">
+                <div class="flex items-center text-sm font-medium text-gray-700">
+                  <Sliders class="w-4 h-4 mr-2 text-gray-500 group-hover:text-primary-600" />
+                  高级配置 <span class="ml-2 text-xs text-gray-400 font-normal">(页码、去水印、Office转换、调试)</span>
+                </div>
+                <component :is="showAdvanced ? ChevronUp : ChevronDown" class="w-4 h-4 text-gray-400" />
+              </button>
+
+              <div v-show="showAdvanced" class="px-4 pb-4 pt-2 space-y-5 animate-fade-in-down">
+                <div v-if="isMinerUBackend">
+                  <label class="block text-xs font-bold text-gray-600 uppercase tracking-wide mb-2">解析范围 (Page Range)</label>
+                  <div class="flex items-center space-x-3 bg-white p-3 rounded border border-gray-200">
+                    <div class="flex items-center space-x-2 flex-1">
+                      <span class="text-xs text-gray-500">Start:</span>
+                      <input v-model.number="config.start_page" type="number" min="0" class="form-input-sm w-full" placeholder="0" />
+                    </div>
+                    <span class="text-gray-300">|</span>
+                    <div class="flex items-center space-x-2 flex-1">
+                      <span class="text-xs text-gray-500">End:</span>
+                      <input v-model.number="config.end_page" type="number" min="0" class="form-input-sm w-full" placeholder="Auto" />
+                    </div>
+                  </div>
+                  <p class="mt-1 text-[10px] text-gray-400">留空或 -1 表示处理到文件末尾。起始页从 0 开始。</p>
+                </div>
+
+                <div v-if="['pipeline', 'paddleocr-vl', 'paddleocr-vl-vllm', 'auto'].includes(config.backend)">
+                   <label class="block text-xs font-bold text-gray-600 uppercase tracking-wide mb-2">预处理增强</label>
+                   <div class="grid grid-cols-1 gap-3">
+                      <div class="border border-gray-200 rounded p-3 bg-white">
+                        <label class="flex items-center cursor-pointer mb-2">
+                          <input v-model="config.remove_watermark" type="checkbox" class="form-checkbox text-purple-600 rounded border-gray-300 h-4 w-4" />
+                          <span class="ml-2 text-sm font-medium text-gray-800">启用去水印 (Watermark Removal)</span>
+                        </label>
+                        <div v-if="config.remove_watermark" class="pl-6 pt-1 space-y-2 animate-fade-in">
+                           <div class="flex items-center justify-between text-xs text-gray-500">
+                             <span>检测置信度: <span class="font-mono text-purple-600">{{ config.watermark_conf_threshold }}</span></span>
+                           </div>
+                           <input v-model.number="config.watermark_conf_threshold" type="range" min="0.1" max="0.9" step="0.05" class="w-full h-1.5 bg-gray-100 rounded-lg appearance-none cursor-pointer accent-purple-600" />
+                        </div>
+                      </div>
+
+                      <div v-if="['auto', 'pipeline'].includes(config.backend)" class="border border-gray-200 rounded p-3 bg-white">
+                         <label class="flex items-center cursor-pointer">
+                          <input v-model="config.convert_office_to_pdf" type="checkbox" class="form-checkbox text-primary-600 rounded border-gray-300 h-4 w-4" />
+                          <span class="ml-2 text-sm font-medium text-gray-800">Office 转 PDF 深度解析</span>
+                        </label>
+                        <p class="pl-6 mt-1 text-xs text-gray-500">
+                          推荐启用。先转换为 PDF 后再解析，可完整提取 Word/PPT 中的复杂图表和排版。
+                        </p>
+                      </div>
+                   </div>
+                </div>
+
+                <div v-if="config.backend === 'video' || config.backend === 'sensevoice'">
+                   <label class="block text-xs font-bold text-blue-600 uppercase tracking-wide mb-2">媒体处理参数</label>
+                   <div class="bg-blue-50 border border-blue-100 rounded p-3 space-y-2">
+                      <div v-if="config.backend === 'video'">
+                         <label class="flex items-center cursor-pointer"><input v-model="config.keep_audio" type="checkbox" class="mr-2 rounded text-blue-600"/> <span class="text-sm">保留音频轨道文件</span></label>
+                         <label class="flex items-center cursor-pointer mt-2"><input v-model="config.enable_keyframe_ocr" type="checkbox" class="mr-2 rounded text-blue-600"/> <span class="text-sm">启用关键帧 OCR 内容识别</span></label>
+                      </div>
+                      <div v-if="config.backend === 'sensevoice'">
+                         <label class="flex items-center cursor-pointer"><input v-model="config.enable_speaker_diarization" type="checkbox" class="mr-2 rounded text-blue-600"/> <span class="text-sm">启用说话人分离 (Speaker Diarization)</span></label>
+                      </div>
+                   </div>
+                </div>
+
+                <div v-if="isMinerUBackend">
+                  <div class="pt-2 border-t border-dashed border-gray-200 mt-2">
+                    <label class="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">DEBUG OUTPUT</label>
+                    <div class="flex space-x-6">
+                       <label class="flex items-center cursor-pointer text-xs text-gray-500 hover:text-gray-700">
+                          <input v-model="config.draw_layout" type="checkbox" class="mr-1.5 rounded border-gray-300" />
+                          生成 Layout 标注 PDF
+                       </label>
+                       <label class="flex items-center cursor-pointer text-xs text-gray-500 hover:text-gray-700">
+                          <input v-model="config.draw_span" type="checkbox" class="mr-1.5 rounded border-gray-300" />
+                          生成 Span 标注 PDF
+                       </label>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+
           </div>
-          <button
-            @click="currentPage++"
-            :disabled="currentPage === totalPages"
-            class="p-2 bg-white border border-gray-300 rounded-md text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-colors"
-          >
-            <ChevronRight class="w-4 h-4" />
+        </div>
+
+        <div v-if="errorMessage" class="mt-4 rounded-lg bg-red-50 border border-red-200 p-4 animate-fade-in flex items-start shadow-sm">
+          <AlertCircle class="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+          <div class="ml-3 flex-1">
+            <h3 class="text-sm font-medium text-red-800">{{ $t('common.error') }}</h3>
+            <p class="mt-1 text-sm text-red-700">{{ errorMessage }}</p>
+          </div>
+          <button @click="errorMessage = ''" class="ml-auto -mr-1 -mt-1 p-1 text-red-600 hover:text-red-800 rounded-full hover:bg-red-100 transition-colors">
+            <X class="w-4 h-4" />
           </button>
         </div>
+
+        <div v-if="submitProgress.length > 0" class="mt-6 card overflow-hidden animate-fade-in shadow-sm">
+          <div class="bg-gray-50 px-4 py-3 border-b border-gray-100 flex justify-between items-center">
+            <h3 class="text-sm font-semibold text-gray-900">{{ $t('common.progress') }}</h3>
+            <span class="text-xs text-gray-500">{{ submitProgress.filter(p => p.success).length }} / {{ submitProgress.length }} 完成</span>
+          </div>
+          <div class="max-h-60 overflow-y-auto divide-y divide-gray-100 custom-scrollbar">
+            <div
+              v-for="(progress, index) in submitProgress"
+              :key="index"
+              class="flex items-center justify-between p-3 px-4 hover:bg-gray-50 transition-colors"
+            >
+              <div class="flex items-center flex-1 min-w-0">
+                <FileText :class="['w-4 h-4 mr-3 flex-shrink-0', progress.success ? 'text-green-500' : progress.error ? 'text-red-500' : 'text-gray-400']" />
+                <div class="truncate">
+                   <p class="text-sm text-gray-700 truncate font-medium">{{ progress.fileName }}</p>
+                   <p v-if="progress.taskId" class="text-[10px] text-gray-400 font-mono tracking-tight">{{ progress.taskId }}</p>
+                   <p v-if="progress.errorMsg" class="text-[10px] text-red-500 truncate">{{ progress.errorMsg }}</p>
+                </div>
+              </div>
+              <div class="flex items-center ml-3">
+                <CheckCircle v-if="progress.success" class="w-5 h-5 text-green-500" />
+                <XCircle v-else-if="progress.error" class="w-5 h-5 text-red-500" />
+                <Loader v-else class="w-5 h-5 text-primary-500 animate-spin" />
+              </div>
+            </div>
+          </div>
+          
+          <div v-if="!submitting" class="p-3 bg-gray-50 border-t border-gray-100 flex justify-end space-x-3">
+            <button @click="resetForm" class="btn btn-secondary btn-sm text-xs">
+              {{ $t('common.continue') }} (清空)
+            </button>
+            <router-link to="/tasks" class="btn btn-primary btn-sm text-xs flex items-center">
+              查看任务列表 <ArrowRight class="w-3 h-3 ml-1"/>
+            </router-link>
+          </div>
+        </div>
+
       </div>
     </div>
-
-    <ConfirmDialog
-      v-model="showCancelDialog"
-      :title="$t('common.confirm')"
-      :message="cancelDialogMessage"
-      @confirm="confirmCancel"
-    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, reactive, computed, watch, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { useTaskStore } from '@/stores'
-import { formatRelativeTime, formatBackendName, formatDuration } from '@/utils/format'
-import StatusBadge from '@/components/StatusBadge.vue'
-import LoadingSpinner from '@/components/LoadingSpinner.vue'
-import ConfirmDialog from '@/components/ConfirmDialog.vue'
+import FileUploader from '@/components/FileUploader.vue'
 import {
-  Search, RefreshCw, Plus, FileText, Eye, FileQuestion,
-  ChevronLeft, ChevronRight, Filter, Server, CheckSquare,
-  XCircle, Copy
+  Upload, Loader, AlertCircle, X, FileText, CheckCircle, XCircle,
+  Settings, ChevronDown, ChevronUp, Info, RotateCcw, ArrowRight,
+  ScanText, Send, Sliders, Wand
 } from 'lucide-vue-next'
-import type { TaskStatus, Backend } from '@/api/types'
+import type { Backend, Language, ParseMethod } from '@/api/types'
 
+const { t } = useI18n()
+const router = useRouter()
 const taskStore = useTaskStore()
 
-const tasks = computed(() => taskStore.tasks)
-const loading = ref(false)
-const autoRefresh = ref(false)
-let refreshInterval: number | null = null
+const fileUploader = ref<InstanceType<typeof FileUploader>>()
+const files = ref<File[]>([])
+const submitting = ref(false)
+const errorMessage = ref('')
+const showAdvanced = ref(false)
+const currentPreset = ref('default')
 
-const filters = ref({
-  status: '' as TaskStatus | '',
-  backend: '' as Backend | '',
-  search: '',
-})
+interface SubmitProgress { fileName: string; success: boolean; error: boolean; taskId?: string; errorMsg?: string }
+const submitProgress = ref<SubmitProgress[]>([])
 
-// 筛选逻辑
-const filteredTasks = computed(() => {
-  let result = tasks.value
-  if (filters.value.status) {
-    result = result.filter(t => t.status === filters.value.status)
-  }
-  if (filters.value.backend) {
-    result = result.filter(t => t.backend === filters.value.backend)
-  }
-  if (filters.value.search) {
-    const search = filters.value.search.toLowerCase().trim()
-    result = result.filter(t =>
-      t.file_name.toLowerCase().includes(search) ||
-      t.task_id.toLowerCase().includes(search)
-    )
-  }
-  return result
-})
+// 预设配置
+const presets = [
+  { id: 'default', name: '通用文档', desc: '标准 Pipeline，速度快', icon: '📄', config: { backend: 'pipeline', force_ocr: false, formula_enable: true, table_enable: true } },
+  { id: 'academic', name: '学术论文', desc: 'Hybrid 模式，公式增强', icon: '🎓', config: { backend: 'hybrid-auto-engine', force_ocr: false, formula_enable: true, table_enable: true } },
+  { id: 'scanned', name: '扫描件', desc: 'Hybrid + 强制 OCR', icon: '🖨️', config: { backend: 'hybrid-auto-engine', force_ocr: true, formula_enable: false, table_enable: true } },
+  { id: 'complex', name: '复杂图表', desc: 'VLM 视觉模型', icon: '📊', config: { backend: 'vlm-auto-engine', force_ocr: false, formula_enable: true, table_enable: true } },
+]
 
-// 分页逻辑
-const pageSize = 20
-const currentPage = ref(1)
-const totalPages = computed(() => Math.ceil(filteredTasks.value.length / pageSize) || 1)
-const paginatedTasks = computed(() => {
-  const start = (currentPage.value - 1) * pageSize
-  const end = start + pageSize
-  return filteredTasks.value.slice(start, end)
-})
-
-// 批量选择
-const selectedTasks = ref<string[]>([])
-const selectAll = ref(false)
-
-function toggleSelectAll() {
-  if (selectAll.value) {
-    selectedTasks.value = paginatedTasks.value.map(t => t.task_id)
-  } else {
-    selectedTasks.value = []
-  }
+const defaultConfig = {
+  backend: 'auto' as Backend,
+  lang: 'auto' as Language,
+  method: 'auto' as ParseMethod,
+  force_ocr: false,
+  formula_enable: true,
+  table_enable: true,
+  priority: 0,
+  start_page: undefined as number | undefined,
+  end_page: undefined as number | undefined,
+  draw_layout: false,
+  draw_span: false,
+  convert_office_to_pdf: false,
+  keep_audio: false,
+  enable_keyframe_ocr: false,
+  ocr_backend: 'paddleocr-vl',
+  keep_keyframes: false,
+  enable_speaker_diarization: false,
+  remove_watermark: false,
+  watermark_conf_threshold: 0.35,
+  watermark_dilation: 10,
 }
 
-watch(paginatedTasks, () => {
-  selectAll.value = false
-})
+const config = reactive({ ...defaultConfig })
 
-// 自动刷新逻辑 (新增持久化)
-watch(autoRefresh, (newVal) => {
-  localStorage.setItem('task_list_auto_refresh', String(newVal))
-  if (newVal) {
-    // 立即刷新一次
-    refreshTasks(false)
-    if (!refreshInterval) {
-        refreshInterval = window.setInterval(() => refreshTasks(false), 5000)
-    }
-  } else {
-    if (refreshInterval) {
-      clearInterval(refreshInterval)
-      refreshInterval = null
-    }
+// 预设应用
+function applyPreset(preset: any) {
+  currentPreset.value = preset.id
+  Object.assign(config, preset.config)
+  // 如果是扫描件，建议去水印
+  if (preset.id === 'scanned') config.remove_watermark = true
+}
+
+// 计算属性
+const isMinerUBackend = computed(() => ['pipeline', 'vlm-auto-engine', 'hybrid-auto-engine'].includes(config.backend))
+const showLanguageOption = computed(() => isMinerUBackend.value || ['paddleocr-vl', 'paddleocr-vl-vllm', 'sensevoice', 'auto'].includes(config.backend))
+const backendDescription = computed(() => {
+  const map: Record<string, string> = {
+    'vlm-auto-engine': '多模态大模型高精度解析，仅支持中英文文档。擅长复杂排版。',
+    'hybrid-auto-engine': '高精度混合解析，支持多语言。结合规则与模型，精度最高。',
+    'pipeline': '传统多模型管道解析，支持多语言，无幻觉，速度较快。',
+    'auto': '自动根据文件类型选择最合适的解析引擎。',
+    'paddleocr-vl': '纯 OCR 模式，适合简单图片提取文字。',
   }
+  return map[config.backend] || '通用处理引擎'
+})
+const formulaLabel = computed(() => config.backend === 'vlm-auto-engine' ? '启用行间公式识别' : (config.backend === 'hybrid-auto-engine' ? '启用行内公式识别' : '启用公式识别'))
+const formulaDescription = computed(() => config.backend === 'vlm-auto-engine' ? '行间公式将显示为图片' : (config.backend === 'hybrid-auto-engine' ? '行内公式将不会被检测或解析' : '公式将不会被特殊处理'))
+
+function onFilesChange(newFiles: File[]) { files.value = newFiles }
+function onBackendChange() { currentPreset.value = 'custom'; if (config.backend === 'vlm-auto-engine') config.lang = 'ch' }
+
+onMounted(() => {
+  const saved = localStorage.getItem('task_submit_config')
+  if (saved) { try { const p = JSON.parse(saved); Object.assign(config, p); } catch(e){} }
 })
 
-// 刷新任务
-async function refreshTasks(forceLoading = false) {
-  // 自动刷新时不显示全屏 Loading，除非手动点击刷新
-  if (forceLoading) loading.value = true
+watch(() => config, () => { localStorage.setItem('task_submit_config', JSON.stringify(config)) }, { deep: true })
+
+function resetConfig() { Object.assign(config, defaultConfig); localStorage.removeItem('task_submit_config'); currentPreset.value = 'default' }
+
+async function submitTasks() {
+  if (files.value.length === 0) { errorMessage.value = t('task.pleaseSelectFile'); return }
   
-  try {
-    await taskStore.fetchTasks(undefined, 1000)
-  } finally {
-    if (forceLoading) loading.value = false
-  }
-}
-
-// 恢复自动刷新状态
-onMounted(async () => {
-  await refreshTasks(true)
-  
-  const savedAutoRefresh = localStorage.getItem('task_list_auto_refresh')
-  if (savedAutoRefresh === 'true') {
-    autoRefresh.value = true
-  }
-})
-
-onUnmounted(() => {
-  if (refreshInterval) clearInterval(refreshInterval)
-})
-
-// 其他工具函数
-function clearFilters() {
-  filters.value.status = ''
-  filters.value.backend = ''
-  filters.value.search = ''
-  currentPage.value = 1
-}
-
-function copyToClipboard(text: string) {
-  navigator.clipboard.writeText(text)
-}
-
-function applyFilters() {
-  currentPage.value = 1
-}
-
-// 取消任务逻辑
-const showCancelDialog = ref(false)
-const cancelDialogMessage = ref('')
-const taskToCancel = ref<string | string[]>('')
-
-async function cancelTask(taskId: string) {
-  taskToCancel.value = taskId
-  cancelDialogMessage.value = '确定要取消这个任务吗？'
-  showCancelDialog.value = true
-}
-
-async function batchCancel() {
-  const pendingTasks = selectedTasks.value.filter(id => {
-    const task = tasks.value.find(t => t.task_id === id)
-    return task?.status === 'pending'
-  })
-
-  if (pendingTasks.length === 0) {
-    alert('选中的任务中没有等待状态(Pending)的任务，无法执行取消操作。')
-    return
+  // 参数校验
+  if (config.start_page !== undefined && config.end_page !== undefined && config.end_page !== -1) {
+    if (config.end_page < config.start_page) {
+      errorMessage.value = "结束页码不能小于开始页码"
+      showAdvanced.value = true
+      return
+    }
   }
 
-  taskToCancel.value = pendingTasks
-  cancelDialogMessage.value = `确定要取消这 ${pendingTasks.length} 个任务吗？`
-  showCancelDialog.value = true
-}
+  submitting.value = true; errorMessage.value = ''
+  submitProgress.value = files.value.map(f => ({ fileName: f.name, success: false, error: false }))
 
-async function confirmCancel() {
-  const ids = Array.isArray(taskToCancel.value) ? taskToCancel.value : [taskToCancel.value]
-  for (const id of ids) {
+  for (let i = 0; i < files.value.length; i++) {
     try {
-      await taskStore.cancelTask(id)
-    } catch (err) {
-      console.error(err)
+      const submitConfig = { ...config }
+      if (submitConfig.force_ocr) submitConfig.method = 'ocr'
+      if (submitConfig.end_page === undefined) delete (submitConfig as any).end_page
+      const response = await taskStore.submitTask({ file: files.value[i], ...submitConfig })
+      submitProgress.value[i].success = true; submitProgress.value[i].taskId = response.task_id
+    } catch (err: any) {
+      submitProgress.value[i].error = true; submitProgress.value[i].errorMsg = err.message
     }
   }
-  selectedTasks.value = []
-  selectAll.value = false
-  await refreshTasks(true)
+  submitting.value = false
+  if (submitProgress.value.every(p => p.success) && files.value.length === 1) {
+    setTimeout(() => { router.push(`/tasks/${submitProgress.value[0].taskId}`) }, 500)
+  }
 }
 </script>
 
 <style scoped>
-.btn-sm { @apply px-3 py-1.5 text-sm; }
-.animate-fade-in { animation: fadeIn 0.4s ease-out; }
-@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-.custom-scrollbar::-webkit-scrollbar { height: 6px; width: 6px; }
+.form-input-sm { @apply px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary-500 transition-colors; }
+.form-checkbox { @apply rounded border-gray-300 focus:ring-primary-500 cursor-pointer; }
+.animate-fade-in { animation: fadeIn 0.3s ease-out; }
+.animate-fade-in-down { animation: fadeInDown 0.2s ease-out; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fadeInDown { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+.custom-scrollbar::-webkit-scrollbar { width: 6px; }
 .custom-scrollbar::-webkit-scrollbar-track { background: #f8f9fa; }
-.custom-scrollbar::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
-.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
+.custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
 </style>
