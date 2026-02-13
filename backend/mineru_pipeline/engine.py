@@ -5,6 +5,7 @@ MinerU Pipeline Engine
 """
 
 import json
+import os
 from pathlib import Path
 from typing import Optional, Dict, Any
 from threading import Lock
@@ -23,6 +24,7 @@ class MinerUPipelineEngine:
     - 支持 PDF 和图片（自动转换）
     - 自动处理输出路径和结果解析
     - 线程安全
+    - 支持 VLLM API 调用 (vlm-auto-engine/hybrid-auto-engine 模式)
     """
 
     _instance: Optional["MinerUPipelineEngine"] = None
@@ -37,12 +39,13 @@ class MinerUPipelineEngine:
                     cls._instance = super().__new__(cls)
         return cls._instance
 
-    def __init__(self, device: str = "cuda:0"):
+    def __init__(self, device: str = "cuda:0", vlm_api_base: str = None):
         """
         初始化引擎
 
         Args:
             device: 设备 (cuda:0, cuda:1 等)
+            vlm_api_base: VLLM API 地址 (例如 http://vllm-mineru:30024/v1)
         """
         if self._initialized:
             return
@@ -52,6 +55,7 @@ class MinerUPipelineEngine:
                 return
 
             self.device = device
+            self.vlm_api_base = vlm_api_base  # 保存 VLLM API 地址
 
             # 从 device 字符串中提取 GPU ID
             if "cuda:" in device:
@@ -61,6 +65,8 @@ class MinerUPipelineEngine:
 
             self._initialized = True
             logger.info(f"🔧 MinerU Pipeline Engine initialized on {device}")
+            if self.vlm_api_base:
+                logger.info(f"   VLLM API Base: {self.vlm_api_base}")
 
     def _load_pipeline(self):
         """延迟加载 MinerU 管道 (do_parse)"""
@@ -132,6 +138,16 @@ class MinerUPipelineEngine:
             parse_mode = "pipeline"
 
         logger.info(f"🚀 MinerU Engine starting with mode: {parse_mode}")
+
+        # === 配置 VLLM 环境变量 (针对 VLM 模式) ===
+        # 如果配置了 vlm_api_base 且当前模式需要 VLM，则注入环境变量
+        if self.vlm_api_base and parse_mode in ["vlm-auto-engine", "hybrid-auto-engine"]:
+            # 设置 OpenAI 兼容的环境变量，vLLM 通常兼容此接口
+            os.environ["OPENAI_API_BASE"] = self.vlm_api_base
+            os.environ["OPENAI_API_KEY"] = "EMPTY"  # vLLM 通常不需要 Key
+            # 同时也设置 MinerU 可能使用的特定变量（视具体版本实现而定）
+            os.environ["MINERU_VLLM_ENDPOINT"] = self.vlm_api_base
+            logger.info(f"   Configured VLLM Endpoint for MinerU: {self.vlm_api_base}")
 
         # 加载管道 (do_parse 函数)
         do_parse_func = self._load_pipeline()
@@ -238,9 +254,14 @@ class MinerUPipelineEngine:
 _engine = None
 
 
-def get_engine() -> MinerUPipelineEngine:
-    """获取全局引擎实例"""
+def get_engine(vlm_api_base: str = None) -> MinerUPipelineEngine:
+    """
+    获取全局引擎实例
+    
+    Args:
+        vlm_api_base: 可选，VLLM API 地址。如果单例已存在，此参数将被忽略。
+    """
     global _engine
     if _engine is None:
-        _engine = MinerUPipelineEngine()
+        _engine = MinerUPipelineEngine(vlm_api_base=vlm_api_base)
     return _engine
