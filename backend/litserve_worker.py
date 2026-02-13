@@ -170,13 +170,13 @@ except ImportError as e:
 
 
 # ==============================================================================
-# VLLM Container Controller (互斥切换版)
+# VLLM Container Controller (互斥切换版 + Pickle 修复)
 # ==============================================================================
 class VLLMController:
     """管理 vLLM Docker 容器的互斥启动"""
     
     def __init__(self):
-        # 不在 __init__ 中创建 client，确保对象是可序列化的
+        # 不在 __init__ 中创建 client，确保对象是可序列化的 (Pickle Safe)
         pass
 
     def _get_client(self):
@@ -191,7 +191,7 @@ class VLLMController:
 
     def ensure_service(self, target_container: str, conflict_container: str, health_url: str, timeout: int = 300):
         """
-        确保目标容器运行，并关闭冲突容器
+        确保目标容器运行，并关闭冲突容器 (互斥逻辑)
         
         Args:
             target_container: 需要运行的容器名
@@ -212,8 +212,8 @@ class VLLMController:
                     logger.info(f"✅ Target service {target_container} is already running.")
                     return
             except Exception as e:
-                # 如果找不到容器，可能说明没创建，抛出错误提示用户
-                logger.error(f"❌ Container {target_container} not found. Please run 'docker compose up --no-start {target_container}' first.")
+                # 如果找不到容器，说明没创建，提示用户
+                logger.error(f"❌ Container {target_container} not found. Please ensure it is created (e.g. docker compose up --no-start).")
                 raise e
 
             # 2. 停止冲突容器 (释放显存)
@@ -732,7 +732,7 @@ class MinerUWorkerAPI(ls.LitAPI):
                 logger.info(f"🔧 Processing with MinerU ({backend}): {file_path}")
                 
                 # 将 backend 模式写入 options，传递给 Engine
-                options["parse_mode"] = backend
+                options["parse_mode"] = backend  # 【关键】确保 parse_mode 正确传递
                 result = self._process_with_mineru(file_path, options)
 
             # 7. auto 模式：根据文件类型自动选择引擎
