@@ -154,10 +154,12 @@ class MinerUPipelineEngine:
 
         # 2. 确定 Method (解析方法)
         # options["method"] 来自 API: auto | txt | ocr
+        # 兼容前端传来的 'ocr' 可能是通过 force_ocr 参数触发的
         parse_method = options.get("method", "auto")
+        if options.get("force_ocr"):
+            parse_method = "ocr"
 
         # 3. 提取其他高级选项 (从 options 中获取，如果没有则使用默认值)
-        # 注意：这里我们允许前端通过 options 传递更多控制参数
         
         # 内容识别
         formula_enable = options.get("formula_enable", True)
@@ -172,13 +174,27 @@ class MinerUPipelineEngine:
         f_dump_orig_pdf = True                                     # 始终保存原始 PDF (用于校验)
         f_dump_content_list = True                                 # 始终生成内容列表
         
-        # 页面范围
-        start_page_id = options.get("start_page_id", 0)
-        end_page_id = options.get("end_page_id", None)             # None 表示处理到最后
+        # 页面范围 (兼容前端传参：前端可能传 start_page 或 start_page_id)
+        # 优先使用 start_page_id (旧名)，如果没有则尝试 start_page (前端新名)
+        start_page_id = options.get("start_page_id", options.get("start_page", 0))
+        end_page_id = options.get("end_page_id", options.get("end_page", None)) # None 表示处理到最后
+
+        # 处理 -1 或空字符串的情况，确保传递给 do_parse 的是有效值
+        if start_page_id is None or str(start_page_id).strip() == "":
+            start_page_id = 0
+        else:
+            start_page_id = int(start_page_id)
+
+        if end_page_id is not None:
+             if end_page_id == -1 or str(end_page_id).strip() == "":
+                 end_page_id = None
+             else:
+                 end_page_id = int(end_page_id)
 
         logger.info(f"🚀 MinerU Engine starting")
         logger.info(f"   Backend: {backend}")
         logger.info(f"   Method: {parse_method}")
+        logger.info(f"   Page Range: {start_page_id} -> {end_page_id if end_page_id is not None else 'End'}")
         if server_url:
             logger.info(f"   Server URL: {server_url}")
 
