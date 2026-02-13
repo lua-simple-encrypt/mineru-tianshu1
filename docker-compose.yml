@@ -78,8 +78,10 @@ services:
       - ./models/paddlex_cache:/root/.paddlex:rw
       - ./models/huggingface_cache:/root/.cache/huggingface:rw
       - ./models/modelscope_cache:/root/.cache/modelscope:rw
-      - ./data/uploads:/app/data/uploads:rw
-      - ./data/output:/app/data/output:rw
+      # 👇👇👇 修改开始：映射本地 input/output 文件夹 👇👇👇
+      - ./input:/app/data/uploads:rw
+      - ./output:/app/data/output:rw
+      # 👆👆👆 修改结束 👆👆👆
       - ./logs/backend:/app/logs:rw
       - ./data/db:/app/data/db:rw
       - /etc/localtime:/etc/localtime:ro
@@ -131,7 +133,6 @@ services:
     networks:
       - tianshu-network
     depends_on:
-      # [关键修正] 移除了 - worker，打破依赖循环
       - rustfs
 
   # ============================================================================
@@ -141,7 +142,13 @@ services:
     image: tianshu-backend:latest
     container_name: tianshu-worker
     restart: unless-stopped
-    command: ["worker", "python", "litserve_worker.py"]
+    command: [
+      "worker",
+      "python",
+      "litserve_worker.py",
+      "--paddleocr-vl-vllm-engine-enabled",
+      "--paddleocr-vl-vllm-api-list", "['http://172.28.0.1:30023/v1']"
+    ]
     ports:
       - "${WORKER_PORT:-8001}:8001"
     volumes:
@@ -149,8 +156,10 @@ services:
       - ./models/paddlex_cache:/root/.paddlex:rw
       - ./models/huggingface_cache:/root/.cache/huggingface:rw
       - ./models/modelscope_cache:/root/.cache/modelscope:rw
-      - ./data/uploads:/app/data/uploads:rw
-      - ./data/output:/app/data/output:rw
+      # 👇👇👇 修改开始：映射本地 input/output 文件夹 (必须与 Backend 保持一致) 👇👇👇
+      - ./input:/app/data/uploads:rw
+      - ./output:/app/data/output:rw
+      # 👆👆👆 修改结束 👆👆👆
       - ./logs/worker:/app/logs:rw
       - ./data/db:/app/data/db:rw
       - /etc/localtime:/etc/localtime:ro
@@ -208,7 +217,7 @@ services:
       - tianshu-network
     depends_on:
       - rustfs
-      - backend  # Worker 依赖 Backend (为了等待镜像构建完成)
+      - backend
 
   # ============================================================================
   # MCP Server (复用 Backend 镜像)
@@ -287,9 +296,9 @@ networks:
 volumes:
   models:
     driver: local
-  uploads:
+  uploads:  # 保留此定义以兼容旧volume，虽然实际上映射了本地路径
     driver: local
-  output:
+  output:   # 保留此定义以兼容旧volume，虽然实际上映射了本地路径
     driver: local
   logs:
     driver: local
