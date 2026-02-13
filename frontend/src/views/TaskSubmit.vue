@@ -270,6 +270,30 @@
             <span class="ml-2 text-sm text-gray-700">{{ $t('task.enableTableRecognition') }}</span>
           </label>
         </div>
+        
+        <div v-if="['pipeline', 'vlm-auto-engine', 'hybrid-auto-engine'].includes(config.backend)" class="mt-6 pt-6 border-t border-gray-200">
+           <h3 class="text-base font-semibold text-gray-900 mb-4">高级调试选项</h3>
+           <div class="space-y-3">
+              <label class="flex items-center">
+                <input
+                  v-model="config.draw_layout"
+                  type="checkbox"
+                  class="w-4 h-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500"
+                />
+                <span class="ml-2 text-sm text-gray-700">绘制布局边框 (layout_bbox)</span>
+              </label>
+
+              <label class="flex items-center">
+                <input
+                  v-model="config.draw_span"
+                  type="checkbox"
+                  class="w-4 h-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500"
+                />
+                <span class="ml-2 text-sm text-gray-700">绘制文本框 (span_bbox)</span>
+              </label>
+           </div>
+           <p class="text-xs text-gray-500 mt-2">这些选项会生成带有红色/绿色边框的 PDF 文件，用于检查解析准确性。</p>
+        </div>
 
         <div v-if="['pipeline', 'paddleocr-vl', 'paddleocr-vl-vllm'].includes(config.backend)" class="mt-6 pt-6 border-t border-gray-200">
           <h3 class="text-base font-semibold text-gray-900 mb-4">{{ $t('task.watermarkOptions') }}</h3>
@@ -351,6 +375,24 @@
               </ul>
             </div>
           </div>
+        </div>
+
+        <div v-if="['auto', 'pipeline'].includes(config.backend)" class="mt-6 pt-6 border-t border-gray-200">
+           <h3 class="text-base font-semibold text-gray-900 mb-4">Office 转换选项</h3>
+           <div class="space-y-3">
+              <label class="flex items-center">
+                <input
+                  v-model="config.convert_office_to_pdf"
+                  type="checkbox"
+                  class="w-4 h-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500"
+                />
+                <span class="ml-2 text-sm text-gray-700">转换为 PDF 后再处理 (LibreOffice)</span>
+              </label>
+              <p class="text-xs text-gray-500 ml-6">
+                启用后，Office 文档将先转换为 PDF，然后使用 MinerU 进行深度解析（支持表格、公式、图片）。<br>
+                如果不启用，将使用 MarkItDown 进行快速文本提取（不支持复杂格式）。
+              </p>
+           </div>
         </div>
       </div>
 
@@ -466,6 +508,14 @@ const config = reactive({
   formula_enable: true,
   table_enable: true,
   priority: 0,
+  
+  // MinerU 高级选项
+  draw_layout: true,
+  draw_span: true,
+  
+  // Office 转换选项
+  convert_office_to_pdf: false,
+
   // Video 专属配置
   keep_audio: false,
   enable_keyframe_ocr: false,
