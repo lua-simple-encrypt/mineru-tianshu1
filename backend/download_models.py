@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
-模型预下载脚本 - Tianshu (Official 3-Options Support)
+模型预下载脚本 - Tianshu (Official 3-Options Support + Full PaddleX Models)
 
 支持官方的三种解析引擎选项:
 1. pipeline (传统多模型管道)
 2. vlm-auto-engine (VLM 自动引擎)
 3. hybrid-auto-engine (混合高精度引擎)
+
+同时下载所有指定的 PaddleX/PaddleOCR 模型到 /app/models/paddlex/ 目录下
 """
 
 import os
@@ -21,10 +23,12 @@ logger.remove()
 logger.add(sys.stdout, format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>")
 
 # ==============================================================================
-# 模型配置清单 (严格参考官方结构)
+# 模型配置清单
 # ==============================================================================
 MODELS = {
-    # --- 1. [Pipeline] 核心模型 ---
+    # -------------------------------------------------------------------------
+    # 1. MinerU 核心模型 (保持扁平结构)
+    # -------------------------------------------------------------------------
     "mineru_pipeline": {
         "name": "MinerU Pipeline (PDF-Extract-Kit)",
         "repo_id": "OpenDataLab/PDF-Extract-Kit-1.0",
@@ -33,8 +37,6 @@ MODELS = {
         "description": "PDF OCR, Layout Analysis models (For 'pipeline' mode)",
         "required": True
     },
-    
-    # --- 2. [VLM / Hybrid] 核心模型 ---
     "mineru_vlm": {
         "name": "MinerU 2.5 VLM (1.2B)",
         "model_id": "opendatalab/MinerU2.5-2509-1.2B",
@@ -44,37 +46,197 @@ MODELS = {
         "required": True
     },
 
-    # --- 3. [通用] PaddleOCR (HuggingFace) ---
-    "paddleocr": {
-        "name": "PaddleOCR-VL 1.5",
-        "repo_id": "PaddlePaddle/PaddleOCR-VL-1.5",
-        "source": "huggingface",
-        "target_dir": "PaddleOCR-VL-1.5",
-        "description": "PaddlePaddle Vision-Language OCR model",
-        "required": True
-    },
+    # -------------------------------------------------------------------------
+    # 2. PaddleX / PaddleOCR 模型 (全部归档到 paddlex/ 子目录)
+    # -------------------------------------------------------------------------
     
-    # --- 4. [辅助] PaddleX Layout (HuggingFace) ---
-    "pp_layout": {
+    # --- 多模态文档解析 ---
+    "paddleocr_vl_1_5": {
+        "name": "PaddleOCR-VL-1.5-0.9B",
+        "repo_id": "PaddlePaddle/PaddleOCR-VL-1.5",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/PaddleOCR-VL-1.5-0.9B",
+        "target_dir": "paddlex/PaddleOCR-VL-1.5-0.9B",
+        "description": "多模态文档解析模型 v1.5",
+        "required": True
+    },
+    "paddleocr_vl_0_9": {
+        "name": "PaddleOCR-VL-0.9B",
+        "repo_id": "PaddlePaddle/PaddleOCR-VL-0.9B",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/PaddleOCR-VL-0.9B",
+        "target_dir": "paddlex/PaddleOCR-VL-0.9B",
+        "description": "多模态文档解析模型 v1.0",
+        "required": False
+    },
+
+    # --- 版面分析 (Layout) ---
+    "pp_doclayout_v3": {
         "name": "PP-DocLayoutV3",
-        "repo_id": "PaddlePaddle/PP-DocLayoutV3",
-        "source": "huggingface",
-        "target_dir": "PP-DocLayoutV3",
-        "description": "PaddleX Document Layout Analysis Model",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/PP-DocLayoutV3",
+        "target_dir": "paddlex/PP-DocLayoutV3",
         "required": True
     },
-
-    # --- 5. [辅助] PaddleX Orientation (HuggingFace) ---
-    "pp_lcnet": {
-        "name": "PP-LCNet Doc Orientation",
-        "repo_id": "PaddlePaddle/PP-LCNet_x1_0_doc_ori",
-        "source": "huggingface",
-        "target_dir": "PP-LCNet_x1_0_doc_ori",
-        "description": "PaddleX Document Orientation Classification Model",
-        "required": True
+    "pp_doclayout_v2": {
+        "name": "PP-DocLayoutV2",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/PP-DocLayoutV2",
+        "target_dir": "paddlex/PP-DocLayoutV2",
+        "required": False
+    },
+    "pp_doclayout_plus_l": {
+        "name": "PP-DocLayout_plus-L",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/PP-DocLayout_plus-L",
+        "target_dir": "paddlex/PP-DocLayout_plus-L",
+        "required": False
+    },
+    "pp_docblocklayout": {
+        "name": "PP-DocBlockLayout",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/PP-DocBlockLayout",
+        "target_dir": "paddlex/PP-DocBlockLayout",
+        "required": False
     },
 
-    # --- 6. [音频] SenseVoice ---
+    # --- 文档矫正/方向分类 ---
+    "pp_lcnet_doc_ori": {
+        "name": "PP-LCNet_x1_0_doc_ori",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/PP-LCNet_x1_0_doc_ori",
+        "target_dir": "paddlex/PP-LCNet_x1_0_doc_ori",
+        "required": True
+    },
+    "pp_lcnet_textline_ori": {
+        "name": "PP-LCNet_x1_0_textline_ori",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/PP-LCNet_x1_0_textline_ori",
+        "target_dir": "paddlex/PP-LCNet_x1_0_textline_ori",
+        "required": False
+    },
+    "pp_lcnet_x0_25_textline_ori": {
+        "name": "PP-LCNet_x0_25_textline_ori",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/PP-LCNet_x0_25_textline_ori",
+        "target_dir": "paddlex/PP-LCNet_x0_25_textline_ori",
+        "required": False
+    },
+    "uvdoc": {
+        "name": "UVDoc (Doc Unwarping)",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/UVDoc",
+        "target_dir": "paddlex/UVDoc",
+        "required": False
+    },
+
+    # --- 通用 OCR (PP-OCRv5) ---
+    "pp_ocrv5_det": {
+        "name": "PP-OCRv5_mobile_det",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/PP-OCRv5_mobile_det",
+        "target_dir": "paddlex/PP-OCRv5_mobile_det",
+        "required": False
+    },
+    "pp_ocrv5_rec": {
+        "name": "PP-OCRv5_mobile_rec",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/PP-OCRv5_mobile_rec",
+        "target_dir": "paddlex/PP-OCRv5_mobile_rec",
+        "required": False
+    },
+    "pp_ocrv5_server_rec": {
+        "name": "PP-OCRv5_server_rec",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/PP-OCRv5_server_rec",
+        "target_dir": "paddlex/PP-OCRv5_server_rec",
+        "required": False
+    },
+    "pp_ocrv4_server_seal_det": {
+        "name": "PP-OCRv4_server_seal_det",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/PP-OCRv4_server_seal_det",
+        "target_dir": "paddlex/PP-OCRv4_server_seal_det",
+        "required": False
+    },
+
+    # --- 多语言 OCR ---
+    "eslav_pp_ocrv5_mobile_rec": {
+        "name": "eslav_PP-OCRv5_mobile_rec",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/eslav_PP-OCRv5_mobile_rec",
+        "target_dir": "paddlex/eslav_PP-OCRv5_mobile_rec",
+        "required": False
+    },
+    "korean_pp_ocrv5_mobile_rec": {
+        "name": "korean_PP-OCRv5_mobile_rec",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/korean_PP-OCRv5_mobile_rec",
+        "target_dir": "paddlex/korean_PP-OCRv5_mobile_rec",
+        "required": False
+    },
+    "latin_pp_ocrv5_mobile_rec": {
+        "name": "latin_PP-OCRv5_mobile_rec",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/latin_PP-OCRv5_mobile_rec",
+        "target_dir": "paddlex/latin_PP-OCRv5_mobile_rec",
+        "required": False
+    },
+
+    # --- 公式/表格识别 ---
+    "pp_formulanet": {
+        "name": "PP-FormulaNet_plus-L",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/PP-FormulaNet_plus-L",
+        "target_dir": "paddlex/PP-FormulaNet_plus-L",
+        "required": False
+    },
+    "pp_lcnet_table_cls": {
+        "name": "PP-LCNet_x1_0_table_cls",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/PP-LCNet_x1_0_table_cls",
+        "target_dir": "paddlex/PP-LCNet_x1_0_table_cls",
+        "required": False
+    },
+    "pp_chart2table": {
+        "name": "PP-Chart2Table",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/PP-Chart2Table",
+        "target_dir": "paddlex/PP-Chart2Table",
+        "required": False
+    },
+    "slanext_wired": {
+        "name": "SLANeXt_wired",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/SLANeXt_wired",
+        "target_dir": "paddlex/SLANeXt_wired",
+        "required": False
+    },
+    "slanet_plus": {
+        "name": "SLANet_plus",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/SLANet_plus",
+        "target_dir": "paddlex/SLANet_plus",
+        "required": False
+    },
+    "rtdetr_wired": {
+        "name": "RT-DETR-L_wired_table_cell_det",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/RT-DETR-L_wired_table_cell_det",
+        "target_dir": "paddlex/RT-DETR-L_wired_table_cell_det",
+        "required": False
+    },
+    "rtdetr_wireless": {
+        "name": "RT-DETR-L_wireless_table_cell_det",
+        "source": "modelscope",
+        "model_id": "PaddlePaddle/RT-DETR-L_wireless_table_cell_det",
+        "target_dir": "paddlex/RT-DETR-L_wireless_table_cell_det",
+        "required": False
+    },
+
+    # -------------------------------------------------------------------------
+    # 3. 其他模型 (Audio / Image)
+    # -------------------------------------------------------------------------
     "sensevoice": {
         "name": "SenseVoice Audio Recognition",
         "model_id": "iic/SenseVoiceSmall",
@@ -83,8 +245,6 @@ MODELS = {
         "description": "Multi-language speech recognition model",
         "required": True
     },
-
-    # --- 7. [音频] Paraformer ---
     "paraformer": {
         "name": "Paraformer Speaker Diarization",
         "model_id": "iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
@@ -93,8 +253,6 @@ MODELS = {
         "description": "Speaker diarization and VAD model",
         "required": False
     },
-
-    # --- 8. [图像] YOLO Watermark ---
     "yolo11": {
         "name": "YOLO11x Watermark Detection",
         "repo_id": "corzent/yolo11x_watermark_detection",
@@ -104,8 +262,6 @@ MODELS = {
         "description": "Watermark detection model",
         "required": False
     },
-
-    # --- 9. [图像] LaMa (运行时自动下载) ---
     "lama": {
         "name": "LaMa Watermark Inpainting",
         "auto_download": True,
@@ -115,7 +271,7 @@ MODELS = {
 }
 
 # ==============================================================================
-# 下载函数
+# 下载函数 (保持不变)
 # ==============================================================================
 
 def download_from_huggingface(repo_id, target_dir, filename=None):
@@ -188,11 +344,12 @@ def verify_model_files(path, model_name):
             return False
             
     # 3. Paddle Models (OCR, Layout, LCNet)
-    elif model_name in ["paddleocr", "pp_layout", "pp_lcnet"]:
-        if not (any(path_obj.rglob("*.pdiparams")) or any(path_obj.rglob("*.safetensors")) or any(path_obj.rglob("*.bin"))):
-             logger.warning(f"   ⚠️  No Paddle params/weights found in {path}")
-             return False
-             
+    elif "paddle" in model_name or "pp_" in model_name or "slanext" in model_name or "uvdoc" in model_name or "rtdetr" in model_name:
+         # PaddleX 模型通常包含 inference.pdmodel 等文件
+         if not (any(path_obj.rglob("*.pdmodel")) or any(path_obj.rglob("*.pdiparams")) or any(path_obj.rglob("*.yaml"))):
+              logger.warning(f"   ⚠️  No Paddle inference files found in {path}")
+              return False
+              
     # 4. YOLO (单文件或目录)
     elif model_name == "yolo11":
         if path_obj.is_file():
@@ -226,18 +383,17 @@ def generate_magic_pdf_json(output_dir):
     config_path = project_root / "magic-pdf.json"
     
     # 注意：这里的路径是 Docker 容器内的路径
+    # models-dir 指向 MinerU Pipeline 的 models 子目录
     config_content = r"""{
   "models-dir": "/app/models/PDF-Extract-Kit-1.0/models",
   "vlm-models-dir": "/app/models/MinerU2.5-2509-1.2B",
   "device-mode": "cuda",
   "layout-config": {
-    "model": "layoutlmv3",
-    "batch_size": 2
+    "model": "doclayout_yolo"
   },
   "formula-config": {
-    "mfd_model": "yolo_v8",
-    "mre_model": "unimernet",
-    "batch_size": 2
+    "mfd_model": "yolo_v8_mfd",
+    "mre_model": "unimernet_small"
   }
 }"""
     try:
@@ -254,7 +410,7 @@ def generate_magic_pdf_json(output_dir):
 
 def main(output_dir, selected_models=None, force=False):
     logger.info("=" * 60)
-    logger.info("🚀 Tianshu Model Download Script (Official 3-Options)")
+    logger.info("🚀 Tianshu Model Download Script (Official 3-Options + PaddleX)")
     logger.info("=" * 60)
 
     output_path = Path(output_dir).resolve()
@@ -295,7 +451,7 @@ def main(output_dir, selected_models=None, force=False):
                     continue
 
             # 下载
-            logger.info(f"   ⬇️  Downloading...")
+            logger.info(f"   ⬇️  Downloading to {config['target_dir']}...")
             path = None
             src = config["source"]
             
@@ -306,6 +462,7 @@ def main(output_dir, selected_models=None, force=False):
                     config.get("filename")
                 )
             elif src == "modelscope":
+                # 优先使用 model_id，如果没有则用 repo_id (兼容旧配置)
                 mid = config.get("model_id") or config.get("repo_id")
                 path = download_from_modelscope(mid, str(target))
 
@@ -317,6 +474,7 @@ def main(output_dir, selected_models=None, force=False):
                 logger.info(f"   📂 Path: {path}")
                 total_dl += 1
             else:
+                logger.error(f"   ❌ Validation failed for {name}")
                 total_fail += 1
 
         except Exception as e:
