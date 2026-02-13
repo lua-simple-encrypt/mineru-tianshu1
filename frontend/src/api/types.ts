@@ -115,6 +115,9 @@ export interface TaskOptions {
   method: ParseMethod
   formula_enable: boolean
   table_enable: boolean
+  // 新增选项
+  draw_layout?: boolean
+  draw_span?: boolean
 }
 
 // 任务提交请求
@@ -126,17 +129,27 @@ export interface SubmitTaskRequest {
   formula_enable?: boolean
   table_enable?: boolean
   priority?: number
+  
+  // MinerU 高级调试参数
+  draw_layout?: boolean // 是否绘制布局边框
+  draw_span?: boolean   // 是否绘制文本Span边框
+
   // Video 专属参数
   keep_audio?: boolean
   enable_keyframe_ocr?: boolean
   ocr_backend?: string
   keep_keyframes?: boolean
+
   // 水印去除参数
   remove_watermark?: boolean
   watermark_conf_threshold?: number
   watermark_dilation?: number
+
   // Audio 专属参数 (SenseVoice)
   enable_speaker_diarization?: boolean
+
+  // Office 转换参数
+  convert_office_to_pdf?: boolean
 }
 
 // 任务信息
