@@ -190,7 +190,7 @@ class MinerUWorkerAPI(ls.LitAPI):
         self.enable_worker_loop = enable_worker_loop
         self.paddleocr_vl_vllm_engine_enabled = paddleocr_vl_vllm_engine_enabled
         self.paddleocr_vl_vllm_api_list = paddleocr_vl_vllm_api_list or []
-        self.mineru_vllm_api_list = mineru_vllm_api_list or []
+        self.mineru_vllm_api_list = mineru_vllm_api_list or []  # 保存 MinerU API 列表
         
         ctx = multiprocessing.get_context("spawn")
         self._global_worker_counter = ctx.Value("i", 0)
