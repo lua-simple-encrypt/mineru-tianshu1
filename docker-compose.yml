@@ -74,14 +74,10 @@ services:
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
-      # 1. 挂载模型目录 (容器内 /app/models 下就是 MinerU2.5 等文件夹)
       - ./models:/app/models:rw
-      # 2. 【关键】挂载配置文件 (告诉 MinerU 去哪里找模型)
       - ./magic-pdf.json:/root/magic-pdf.json:ro
-      # 3. 映射本地输入输出文件夹
       - ./input:/app/data/uploads:rw
       - ./output:/app/data/output:rw
-      # 4. 日志与数据库
       - ./logs/backend:/app/logs:rw
       - ./data/db:/app/data/db:rw
       - /etc/localtime:/etc/localtime:ro
@@ -136,30 +132,115 @@ services:
       - rustfs
 
   # ============================================================================
+  # vLLM Service - PaddleOCR Fix (PaddleOCR-VL-1.5)
+  # ============================================================================
+  vllm-paddleocr:
+    image: vllm/vllm-openai:nightly
+    container_name: tianshu-vllm-paddleocr
+    restart: unless-stopped
+    ports:
+      - "30023:30023"
+    volumes:
+      # 挂载宿主机 models 目录到容器 /models
+      - ./models:/models:ro
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      - TZ=Asia/Shanghai
+      # 可以通过环境变量控制显卡，例如 CUDA_VISIBLE_DEVICES=1
+      - CUDA_VISIBLE_DEVICES=${VLLM_PADDLE_DEVICE:-0}
+    command: >
+      --model /models/PaddleOCR-VL-1.5
+      --served-model-name PaddleOCR-VL-1.5-0.9B
+      --trust-remote-code
+      --host 0.0.0.0
+      --port 30023
+      --gpu-memory-utilization 0.9
+      --max-model-len 16384
+      --enforce-eager
+    # vLLM 需要较大的共享内存
+    shm_size: 32gb
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:30023/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - tianshu-network
+
+  # ============================================================================
+  # vLLM Service - MinerU (MinerU-1.2B)
+  # ============================================================================
+  vllm-mineru:
+    image: vllm/vllm-openai:nightly
+    container_name: tianshu-vllm-mineru
+    restart: unless-stopped
+    ports:
+      - "30024:30024"
+    volumes:
+      # 挂载宿主机 models 目录到容器 /models
+      - ./models:/models:ro
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      - TZ=Asia/Shanghai
+      # 可以通过环境变量控制显卡，例如 CUDA_VISIBLE_DEVICES=2
+      - CUDA_VISIBLE_DEVICES=${VLLM_MINERU_DEVICE:-0}
+    command: >
+      --model /models/MinerU2.5-2509-1.2B
+      --served-model-name MinerU-1.2B
+      --trust-remote-code
+      --host 0.0.0.0
+      --port 30024
+      --gpu-memory-utilization 0.9
+      --max-model-len 8192
+      --enforce-eager
+    # vLLM 需要较大的共享内存
+    shm_size: 32gb
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:30024/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - tianshu-network
+
+  # ============================================================================
   # LitServe GPU Worker (复用 Backend 镜像)
   # ============================================================================
   worker:
     image: tianshu-backend:latest
     container_name: tianshu-worker
     restart: unless-stopped
+    # ⚠️ 修改：将硬编码 IP 替换为 vllm 服务名
     command: [
       "worker",
       "python",
       "litserve_worker.py",
       "--paddleocr-vl-vllm-engine-enabled",
-      "--paddleocr-vl-vllm-api-list", "['http://172.28.0.1:30023/v1']"
+      "--paddleocr-vl-vllm-api-list", "['http://vllm-paddleocr:30023/v1']"
     ]
     ports:
       - "${WORKER_PORT:-8001}:8001"
     volumes:
-      # 1. 挂载模型目录
       - ./models:/app/models:rw
-      # 2. 【关键】挂载配置文件 (告诉 MinerU 去哪里找模型)
       - ./magic-pdf.json:/root/magic-pdf.json:ro
-      # 3. 映射本地输入输出文件夹 (必须与 Backend 保持一致)
       - ./input:/app/data/uploads:rw
       - ./output:/app/data/output:rw
-      # 4. 日志与数据库
       - ./logs/worker:/app/logs:rw
       - ./data/db:/app/data/db:rw
       - /etc/localtime:/etc/localtime:ro
@@ -218,6 +299,7 @@ services:
     depends_on:
       - rustfs
       - backend
+      - vllm-paddleocr
 
   # ============================================================================
   # MCP Server (复用 Backend 镜像)
