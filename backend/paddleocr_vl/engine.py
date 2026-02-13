@@ -18,7 +18,6 @@ from threading import Lock
 import time
 from loguru import logger
 
-
 class PaddleOCRVLEngine:
     """
     PaddleOCR-VL 解析引擎（新版本）
@@ -95,7 +94,7 @@ class PaddleOCRVLEngine:
             if not paddle.is_compiled_with_cuda():
                 logger.warning("⚠️  PaddlePaddle is not compiled with CUDA")
                 logger.warning("   PaddleOCR-VL requires GPU support")
-                logger.warning("   Install: pip install paddlepaddle-gpu==3.2.0")
+                logger.warning("   Install: pip install paddlepaddle-gpu==3.0.0b1 -i https://www.paddlepaddle.org.cn/packages/stable/cu118/")
                 return
 
             # 检查是否有可用的 GPU
@@ -126,7 +125,6 @@ class PaddleOCRVLEngine:
 
         except ImportError:
             logger.warning("⚠️  PaddlePaddle not installed")
-            logger.warning("   Install: pip install paddlepaddle-gpu==3.2.0")
         except Exception as e:
             logger.debug(f"GPU check warning: {e}")
 
@@ -155,28 +153,38 @@ class PaddleOCRVLEngine:
                     logger.warning("⚠️  CUDA not available, PaddleOCR-VL may not work")
 
                 # =========================================================================
-                # 智能路径解析逻辑
+                # 智能路径解析逻辑 (解决重复下载的核心)
                 # =========================================================================
-                # 1. 定义本地模型根目录 (指向 paddlex 子目录)
+                # 1. 定义本地模型根目录 (指向我们挂载的 /app/models/paddlex)
                 base_model_dir = Path("/app/models/paddlex")
                 
                 # 2. 尝试拼接本地路径
-                # PaddleX 官方模型名称通常包含版本号
                 local_model_path = base_model_dir / self.model_name
                 
-                pipeline_source = self.model_name # 默认使用模型名称（触发在线查找/缓存查找）
+                # 默认行为：如果本地没找到，使用模型名称（这将触发 PaddleX 去网络下载）
+                pipeline_source = self.model_name 
 
+                # 3. 设置 PaddleX 缓存目录 [关键修改]
+                # 将 PADDLEX_HOME 设置到挂载卷中，这样即使自动下载，下次重启也在
+                # 这解决了 "Using official model... automatically downloaded" 重复发生的问题
+                cache_dir = base_model_dir / ".paddlex_cache"
+                cache_dir.mkdir(exist_ok=True, parents=True)
+                os.environ["PADDLEX_HOME"] = str(cache_dir)
+                logger.info(f"💾 Set PADDLEX_HOME to: {os.environ['PADDLEX_HOME']}")
+
+                # 4. 严格检查本地模型路径
                 if local_model_path.exists() and local_model_path.is_dir():
-                    logger.info(f"📂 Found local model cache: {local_model_path}")
-                    # 强制使用本地绝对路径，防止 PaddleX 重新去 ~/.paddlex 下载
-                    pipeline_source = str(local_model_path)
-                    
-                    # 设置 PaddleX 缓存目录到 paddlex 下，保持整洁
-                    # 这样即使下载辅助模型，也会存放在我们挂载的目录中
-                    os.environ["PADDLEX_HOME"] = "/app/models/paddlex/.paddlex_cache"
+                    # 检查目录下是否有文件，避免空挂载导致 "pipeline does not exist" 错误
+                    if any(local_model_path.iterdir()): 
+                        logger.info(f"📂 Found local model files: {local_model_path}")
+                        # 强制使用本地绝对路径
+                        pipeline_source = str(local_model_path)
+                    else:
+                        logger.warning(f"⚠️  Directory exists but is EMPTY: {local_model_path}")
+                        logger.warning("   Falling back to auto-download mode.")
                 else:
-                    logger.warning(f"⚠️  Local model not found at: {local_model_path}")
-                    logger.info(f"   Will attempt to load '{self.model_name}' from official source/cache...")
+                    logger.warning(f"⚠️  Local model path not found: {local_model_path}")
+                    logger.info(f"   Will attempt to download '{self.model_name}' to cache...")
 
                 # 初始化管道
                 start_time = time.time()
@@ -185,7 +193,7 @@ class PaddleOCRVLEngine:
                 self._pipeline = create_pipeline(
                     pipeline=pipeline_source,
                     device=f"gpu:{self.gpu_id}" if paddle.is_compiled_with_cuda() else "cpu",
-                    # 可以在这里传递其他参数，例如 use_hp_ip=True 等
+                    # 可以在这里传递其他参数
                 )
 
                 logger.info("=" * 60)
@@ -203,9 +211,9 @@ class PaddleOCRVLEngine:
                 logger.error(f"   错误信息: {e}")
                 logger.error("")
                 logger.error("💡 排查建议:")
-                logger.error("   1. 确保模型文件存在于 /app/models/paddlex/")
-                logger.error("   2. 检查显存是否充足")
-                logger.error("   3. 检查 CUDA 版本兼容性")
+                logger.error("   1. 检查 /app/models/paddlex/ 目录是否挂载正确")
+                logger.error("   2. 检查目录是否为空")
+                logger.error("   3. 检查显存和 CUDA 版本")
                 logger.error("=" * 80)
 
                 import traceback
@@ -213,6 +221,19 @@ class PaddleOCRVLEngine:
                 logger.debug(traceback.format_exc())
 
                 raise
+
+    def warmup(self):
+        """
+        手动触发模型加载（预热）
+        建议在 Worker 启动时调用，避免第一个请求处理过慢
+        """
+        if self._pipeline is None:
+            logger.info("🔥 Warming up PaddleOCR-VL engine...")
+            try:
+                self._load_pipeline()
+                logger.info("🔥 Warmup completed! Engine is ready.")
+            except Exception as e:
+                logger.error(f"🔥 Warmup failed: {e}")
 
     def cleanup(self):
         """
@@ -277,7 +298,6 @@ class PaddleOCRVLEngine:
             logger.info(f"   识别了 {len(results)} 页/张")
 
             markdown_list = []
-            json_list = []
 
             for idx, res in enumerate(results, 1):
                 logger.info(f"📝 处理结果 {idx}/{len(results)}")
@@ -298,20 +318,15 @@ class PaddleOCRVLEngine:
                         res.save_to_markdown(str(page_output_dir))
 
                     # 收集 Markdown 内容
-                    # 注意：PaddleX 不同版本的属性名可能不同，尝试做兼容
+                    md_content = ""
                     if hasattr(res, "markdown"):
-                        # 如果 res.markdown 是对象，尝试转字符串或取 text
-                        md_content = res.markdown
-                        markdown_list.append(md_content)
+                        # 如果 res.markdown 是对象，尝试转字符串
+                        md_content = str(res.markdown)
                     elif hasattr(res, "str"):
-                         # 某些任务可能用 str 属性返回文本
-                         markdown_list.append(res.str)
-
-                    # 收集 JSON 数据 (如果有)
-                    # 有些结果对象可能没有直接的 json 属性，而是通过 save_to_json 生成
-                    # 这里尝试从已保存的文件读取，或者如果对象有 dict/json 方法
-                    # 简单起见，如果 res 本身是可序列化的，也可以直接用
-                    pass 
+                         md_content = str(res.str)
+                    
+                    if md_content:
+                        markdown_list.append(md_content)
 
                 except Exception as e:
                     logger.warning(f"   页处理出错: {e}")
@@ -326,10 +341,10 @@ class PaddleOCRVLEngine:
                     logger.info("   使用官方 concatenate_markdown_pages() 方法合并")
                 except Exception as e:
                     logger.warning(f"   合并失败，降级为手动合并: {e}")
-                    markdown_text = "\n\n---\n\n".join([str(m) for m in markdown_list])
+                    markdown_text = "\n\n---\n\n".join(markdown_list)
             elif markdown_list:
                 # 手动合并
-                markdown_text = "\n\n---\n\n".join([str(m) for m in markdown_list])
+                markdown_text = "\n\n---\n\n".join(markdown_list)
             
             # 如果没有直接获得 markdown，尝试读取生成的 .md 文件
             if not markdown_text:
@@ -349,7 +364,6 @@ class PaddleOCRVLEngine:
                 "output_path": str(output_path),
                 "markdown": markdown_text,
                 "markdown_file": str(markdown_file),
-                # "json_file": ... (如果生成了合并的JSON)
             }
 
         except Exception as e:
