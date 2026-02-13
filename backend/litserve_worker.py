@@ -265,8 +265,9 @@ class MinerUWorkerAPI(ls.LitAPI):
         ctx = multiprocessing.get_context("spawn")
         self._global_worker_counter = ctx.Value("i", 0)
 
-        # 初始化 Docker 控制器
-        self.vllm_controller = VLLMController()
+        # 【修正】不要在 __init__ 中初始化 VLLMController，避免 pickle 错误
+        # self.vllm_controller = VLLMController()
+        self.vllm_controller = None
 
     def setup(self, device):
         """
@@ -281,6 +282,9 @@ class MinerUWorkerAPI(ls.LitAPI):
             self._global_worker_counter.value += 1
         logger.info(f"🔢 [Init] I am Global Worker #{my_global_index} (on {device})")
         
+        # 【修正】在 Worker 进程中初始化 Docker 控制器
+        self.vllm_controller = VLLMController()
+
         # 1. 分配 PaddleOCR VLLM API
         if self.paddleocr_vl_vllm_engine_enabled and len(self.paddleocr_vl_vllm_api_list) > 0:
             assigned_api = self.paddleocr_vl_vllm_api_list[my_global_index % len(self.paddleocr_vl_vllm_api_list)]
