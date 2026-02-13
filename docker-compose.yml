@@ -4,10 +4,9 @@
 name: tianshu
 
 services:
-  # ... (Redis, RustFS, Init-Models, Backend 保持不变，省略以节省篇幅) ...
-  # (请保留您原文件中的 redis, rustfs, init-models, backend, mcp-server, frontend 部分)
-  # 这里仅展示修改的部分：vllm 服务和 worker
-
+  # ============================================================================
+  # Redis (高性能任务队列 - 可选)
+  # ============================================================================
   redis:
     image: redis:7-alpine
     container_name: tianshu-redis
@@ -32,6 +31,9 @@ services:
     networks:
       - tianshu-network
 
+  # ============================================================================
+  # RustFS Object Storage (S3 Compatible)
+  # ============================================================================
   rustfs:
     image: rustfs/rustfs:latest
     container_name: tianshu-rustfs
@@ -57,12 +59,18 @@ services:
     networks:
       - tianshu-network
 
+  # ============================================================================
+  # Model Initializer (自动下载模型)
+  # ============================================================================
   init-models:
     image: tianshu-backend:latest
     container_name: tianshu-init-models
+    # 覆盖入口点，直接运行下载脚本
     entrypoint: ["python", "download_models.py", "--output", "/app/models"]
     volumes:
+      # 挂载模型目录 (RW)
       - ./models:/app/models:rw
+      # 挂载配置文件 (RW)，以便脚本生成 magic-pdf.json
       - ./magic-pdf.json:/app/magic-pdf.json:rw
       - /etc/localtime:/etc/localtime:ro
     environment:
@@ -72,6 +80,9 @@ services:
     networks:
       - tianshu-network
 
+  # ============================================================================
+  # Backend API Server
+  # ============================================================================
   backend:
     build:
       context: .
@@ -145,6 +156,7 @@ services:
   # ============================================================================
   # vLLM Service - PaddleOCR (默认启动)
   # 优化：显存占用 0.7 (约16.8GB)，留出空间给 Worker
+  # 路径更新：指向 paddlex 子目录
   # ============================================================================
   vllm-paddleocr:
     image: vllm/vllm-openai:nightly
@@ -160,7 +172,7 @@ services:
       - TZ=Asia/Shanghai
       - CUDA_VISIBLE_DEVICES=${VLLM_PADDLE_DEVICE:-0}
     command: >
-      --model /models/PaddleOCR-VL-1.5
+      --model /models/paddlex/PaddleOCR-VL-1.5-0.9B
       --served-model-name PaddleOCR-VL-1.5-0.9B
       --trust-remote-code
       --host 0.0.0.0
@@ -222,6 +234,7 @@ services:
   worker:
     image: tianshu-backend:latest
     container_name: tianshu-worker
+    # ⚠️ 关键：使用 root 用户运行以确保能访问 /var/run/docker.sock
     user: root
     restart: unless-stopped
     command: [
@@ -235,6 +248,7 @@ services:
     ports:
       - "${WORKER_PORT:-8001}:8001"
     volumes:
+      # ⚠️ 关键：挂载 Docker Socket，允许 Worker 控制兄弟容器（启动/停止 vLLM）
       - /var/run/docker.sock:/var/run/docker.sock
       - ./models:/app/models:rw
       - ./magic-pdf.json:/root/magic-pdf.json:ro
@@ -274,6 +288,9 @@ services:
       - REDIS_PORT=${REDIS_PORT:-6379}
       - REDIS_DB=${REDIS_DB:-0}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      # ✅ 更新 PaddleX 缓存路径到 paddlex 子目录
+      - PADDLE_HOME=/app/models/paddlex/.paddleocr
+      - PADDLEX_HOME=/app/models/paddlex/.paddlex
     mem_limit: ${WORKER_MEMORY_LIMIT:-16G}
     memswap_limit: ${WORKER_MEMORY_LIMIT:-16G}
     mem_reservation: ${WORKER_MEMORY_RESERVATION:-8G}
@@ -300,6 +317,9 @@ services:
       - backend
       - init-models # 确保模型已下载
 
+  # ============================================================================
+  # MCP Server (复用 Backend 镜像)
+  # ============================================================================
   mcp-server:
     image: tianshu-backend:latest
     container_name: tianshu-mcp
@@ -329,6 +349,9 @@ services:
     depends_on:
       - backend
 
+  # ============================================================================
+  # Frontend (Vue 3 + Nginx)
+  # ============================================================================
   frontend:
     build:
       context: .
