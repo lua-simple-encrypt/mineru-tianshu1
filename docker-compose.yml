@@ -226,13 +226,14 @@ services:
     image: tianshu-backend:latest
     container_name: tianshu-worker
     restart: unless-stopped
-    # ⚠️ 修改：将硬编码 IP 替换为 vllm 服务名
+    # ⚠️ 修改：将硬编码 IP 替换为 vllm 服务名，并新增 MinerU API 配置
     command: [
       "worker",
       "python",
       "litserve_worker.py",
       "--paddleocr-vl-vllm-engine-enabled",
-      "--paddleocr-vl-vllm-api-list", "['http://vllm-paddleocr:30023/v1']"
+      "--paddleocr-vl-vllm-api-list", "['http://vllm-paddleocr:30023/v1']",
+      "--mineru-vllm-api-list", "['http://vllm-mineru:30024/v1']"
     ]
     ports:
       - "${WORKER_PORT:-8001}:8001"
@@ -300,6 +301,7 @@ services:
       - rustfs
       - backend
       - vllm-paddleocr
+      - vllm-mineru
 
   # ============================================================================
   # MCP Server (复用 Backend 镜像)
