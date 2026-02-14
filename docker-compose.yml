@@ -1,5 +1,5 @@
 # Tianshu (天枢) - Production Docker Compose
-# 终极优化版：相对路径挂载 + Paddle自动下载持久化 + 权限修复 + 任务调度 + VLLM互斥
+# 终极优化版：相对路径挂载 + Paddle自动下载持久化 + 权限修复 + 任务调度 + VLLM互斥 + 日志静默防刷屏
 
 name: tianshu
 
@@ -175,6 +175,10 @@ services:
       - TZ=Asia/Shanghai
       - CUDA_VISIBLE_DEVICES=${VLLM_PADDLE_DEVICE:-0}
       - TOKENIZERS_PARALLELISM=false
+      # ✅ [修复 Bug 6] 强力压制底层 C++ 和 Python 的刷屏日志 (如 smart_resize)
+      - GLOG_minloglevel=2
+      - VLLM_LOGGING_LEVEL=ERROR
+      - PYTHONWARNINGS=ignore
     command: >
       --model /root/.paddlex/official_models/PaddleOCR-VL-1.5-0.9B
       --served-model-name PaddleOCR-VL-1.5-0.9B
@@ -216,6 +220,10 @@ services:
     environment:
       - TZ=Asia/Shanghai
       - CUDA_VISIBLE_DEVICES=${VLLM_MINERU_DEVICE:-0}
+      # ✅ [修复 Bug 6] 同样对 MinerU 的 VLLM 容器执行日志静默
+      - GLOG_minloglevel=2
+      - VLLM_LOGGING_LEVEL=ERROR
+      - PYTHONWARNINGS=ignore
     command: >
       --model /models/MinerU2.5-2509-1.2B
       --served-model-name MinerU-1.2B
