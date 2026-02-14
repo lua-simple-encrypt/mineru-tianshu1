@@ -12,7 +12,7 @@ import json
 import os
 import re
 import uuid
-import mimetypes  # ✅ 修复：用于识别文件类型以支持预览
+import mimetypes
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -35,10 +35,16 @@ from auth.auth_db import AuthDB
 from auth.routes import router as auth_router
 from task_db import TaskDB
 
+# ✅ [优化] 预注册 MIME 类型，防止精简环境识别失败导致浏览器强制下载
+mimetypes.add_type('application/pdf', '.pdf')
+mimetypes.add_type('image/png', '.png')
+mimetypes.add_type('image/jpeg', '.jpg')
+mimetypes.add_type('image/jpeg', '.jpeg')
+
 # 初始化 FastAPI 应用
 app = FastAPI(
     title="MinerU Tianshu API",
-    description="天枢 - 企业级 AI 数据预处理平台 | 支持文档、图片、音频、视频等多模态数据处理 | 企业级认证授权",
+    description="天枢 - 企业级 AI 数据预处理平台 | 支持文档、图片、音频、视频等多模态数据处理",
     version="2.0.0",
 )
 
@@ -56,25 +62,14 @@ PROJECT_ROOT = Path(__file__).parent.parent
 
 # 初始化数据库
 db_path_env = os.getenv("DATABASE_PATH")
-if db_path_env:
-    db_path = str(Path(db_path_env).resolve())
-    logger.info(f"📊 API Server using DATABASE_PATH: {db_path_env} -> {db_path}")
-    db = TaskDB(db_path)
-else:
-    logger.warning("⚠️  DATABASE_PATH not set in API Server, using default")
-    default_db_path = PROJECT_ROOT / "data" / "db" / "mineru_tianshu.db"
-    default_db_path.parent.mkdir(parents=True, exist_ok=True)
-    db_path = str(default_db_path.resolve())
-    logger.info(f"📊 Using default database path: {db_path}")
-    db = TaskDB(db_path)
+db_path = str(Path(db_path_env).resolve()) if db_path_env else str((PROJECT_ROOT / "data" / "db" / "mineru_tianshu.db").resolve())
+db = TaskDB(db_path)
 auth_db = AuthDB()
 
 # 注册认证路由
 app.include_router(auth_router)
 
-# ==============================================================================
 # 目录配置
-# ==============================================================================
 output_path_env = os.getenv("OUTPUT_PATH")
 OUTPUT_DIR = Path(output_path_env) if output_path_env else PROJECT_ROOT / "data" / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -84,41 +79,32 @@ UPLOAD_DIR = Path(upload_path_env) if upload_path_env else PROJECT_ROOT / "input
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
-# 注意：此函数已废弃，Worker 已自动上传图片到 RustFS 并替换 URL
 def process_markdown_images_legacy(md_content: str, image_dir: Path, result_path: str):
-    if "http://" in md_content or "https://" in md_content:
-        return md_content
-    if not image_dir.exists():
+    """【向后兼容】处理 Markdown 中的图片本地引用"""
+    if "http://" in md_content or "https://" in md_content or not image_dir.exists():
         return md_content
 
     def replace_image_path(match):
-        full_match = match.group(0)
-        image_path = match.group(2)
-        alt_text = match.group(1) if "![" in full_match else "Image"
-        if image_path.startswith("http"):
-            return full_match
+        full_match, alt_text, image_path = match.group(0), match.group(1), match.group(2)
+        if image_path.startswith("http"): return full_match
         try:
             image_filename = Path(image_path).name
             output_dir_str = str(OUTPUT_DIR).replace("\\", "/")
             result_path_str = result_path.replace("\\", "/")
             if result_path_str.startswith(output_dir_str):
                 relative_path = result_path_str[len(output_dir_str) :].lstrip("/")
-                encoded_relative_path = quote(relative_path, safe="/")
-                encoded_filename = quote(image_filename, safe="/")
-                static_url = f"/api/v1/files/output/{encoded_relative_path}/images/{encoded_filename}"
-                return f"![{alt_text}]({static_url})" if "![" in full_match else full_match.replace(image_path, static_url)
+                static_url = f"/api/v1/files/output/{quote(relative_path)}/images/{quote(image_filename)}"
+                return f"![{alt_text}]({static_url})"
         except: pass
         return full_match
 
-    md_pattern = r"!\[([^\]]*)\]\(([^)]+)\)"
-    html_pattern = r'<img\s+([^>]*\s+)?src="([^"]+)"([^>]*)>'
-    new_content = re.sub(md_pattern, replace_image_path, md_content)
-    new_content = re.sub(html_pattern, replace_image_path, new_content)
-    return new_content
+    return re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", replace_image_path, md_content)
+
 
 @app.get("/", tags=["系统信息"])
 async def root():
     return {"service": "MinerU Tianshu", "version": "2.0.0", "docs": "/docs"}
+
 
 @app.post("/api/v1/tasks/submit", tags=["任务管理"])
 async def submit_task(
@@ -140,8 +126,6 @@ async def submit_task(
     dump_model_output: bool = Form(True),
     dump_content_list: bool = Form(True),
     dump_orig_pdf: bool = Form(True),
-    draw_layout: bool = Form(True),
-    draw_span: bool = Form(True),
     keep_audio: bool = Form(False),
     enable_keyframe_ocr: bool = Form(False),
     ocr_backend: str = Form("paddleocr-vl"),
@@ -156,47 +140,44 @@ async def submit_task(
     try:
         unique_filename = f"{uuid.uuid4().hex}_{file.filename}"
         temp_file_path = UPLOAD_DIR / unique_filename
-        with open(temp_file_path, "wb") as temp_file:
-            while True:
-                chunk = await file.read(1 << 23)
-                if not chunk: break
-                temp_file.write(chunk)
-        
+        with open(temp_file_path, "wb") as f:
+            while chunk := await file.read(1 << 23): f.write(chunk)
+
         options = {
             "lang": lang, "method": method, "formula_enable": formula_enable, "table_enable": table_enable,
             "start_page": start_page, "end_page": end_page, "force_ocr": force_ocr, "server_url": server_url,
             "draw_layout_bbox": draw_layout_bbox, "draw_span_bbox": draw_span_bbox, "dump_markdown": dump_markdown,
             "dump_middle_json": dump_middle_json, "dump_model_output": dump_model_output, "dump_content_list": dump_content_list,
-            "dump_orig_pdf": dump_orig_pdf, "draw_layout": draw_layout, "draw_span": draw_span,
-            "keep_audio": keep_audio, "enable_keyframe_ocr": enable_keyframe_ocr, "ocr_backend": ocr_backend,
-            "keep_keyframes": keep_keyframes, "enable_speaker_diarization": enable_speaker_diarization,
+            "dump_orig_pdf": dump_orig_pdf, "keep_audio": keep_audio, "enable_keyframe_ocr": enable_keyframe_ocr,
+            "ocr_backend": ocr_backend, "keep_keyframes": keep_keyframes, "enable_speaker_diarization": enable_speaker_diarization,
             "remove_watermark": remove_watermark, "watermark_conf_threshold": watermark_conf_threshold,
-            "watermark_dilation": watermark_dilation, "convert_office_to_pdf": convert_office_to_pdf
+            "watermark_dilation": watermark_dilation, "convert_office_to_pdf": convert_office_to_pdf,
         }
+
         task_id = db.create_task(file_name=file.filename, file_path=str(temp_file_path), backend=backend, options=options, priority=priority, user_id=current_user.user_id)
         return {"success": True, "task_id": task_id, "status": "pending", "file_name": file.filename}
     except Exception as e:
-        logger.error(f"❌ Failed to submit task: {e}")
+        logger.error(f"❌ Task submission failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/api/v1/tasks/{task_id}", tags=["任务管理"])
 async def get_task_status(
     task_id: str,
-    upload_images: bool = Query(False),
-    format: str = Query("markdown", description="markdown/json/both"),
+    format: str = Query("markdown", description="返回格式: markdown/json/both"),
     current_user: User = Depends(get_current_active_user),
 ):
     task = db.get_task(task_id)
     if not task: raise HTTPException(status_code=404, detail="Task not found")
+
     if not current_user.has_permission(Permission.TASK_VIEW_ALL) and task.get("user_id") != current_user.user_id:
         raise HTTPException(status_code=403, detail="Permission denied")
 
     source_url = f"/api/v1/files/upload/{quote(Path(task['file_path']).name)}" if task.get("file_path") else None
     response = {
         "success": True, "task_id": task_id, "status": task["status"], "file_name": task["file_name"],
-        "source_url": source_url, "backend": task["backend"], "priority": task["priority"],
-        "error_message": task["error_message"], "created_at": task["created_at"],
-        "started_at": task["started_at"], "completed_at": task["completed_at"], "user_id": task.get("user_id"),
+        "source_url": source_url, "backend": task["backend"], "error_message": task["error_message"],
+        "created_at": task["created_at"], "started_at": task["started_at"], "completed_at": task["completed_at"],
     }
 
     if task.get("is_parent"):
@@ -205,96 +186,87 @@ async def get_task_status(
         response["subtask_progress"] = {"total": child_count, "completed": child_completed, "percentage": round(child_completed / child_count * 100, 1) if child_count > 0 else 0}
 
     if task["status"] == "completed" and task["result_path"]:
-        result_dir = Path(task["result_path"])
-        if result_dir.exists():
+        res_dir = Path(task["result_path"])
+        if res_dir.exists():
             response["data"] = {}
-            md_files = list(result_dir.rglob("*.md"))
-            json_files = [f for f in result_dir.rglob("*.json") if not f.parent.name.startswith("page_") and (f.name in ["content.json", "result.json"] or "_content_list.json" in f.name)]
-            
-            pdf_files = list(result_dir.rglob("*.pdf"))
-            preview_pdf = next((p for p in pdf_files if "_layout.pdf" in p.name), next((p for p in pdf_files if "_span.pdf" in p.name), None))
-            if preview_pdf:
-                try: response["data"]["pdf_path"] = quote(str(preview_pdf.relative_to(OUTPUT_DIR)).replace("\\", "/"))
+            # 查找预览PDF
+            pdf = next(res_dir.rglob("*_layout.pdf"), next(res_dir.rglob("*.pdf"), None))
+            if pdf: 
+                try: response["data"]["pdf_path"] = quote(str(pdf.relative_to(OUTPUT_DIR)).replace("\\", "/"))
                 except: pass
 
-            if format in ["markdown", "both"] and md_files:
-                md_file = next((f for f in md_files if f.name == "result.md"), md_files[0])
-                with open(md_file, "r", encoding="utf-8") as f:
-                    response["data"]["content"] = process_markdown_images_legacy(f.read(), md_file.parent / "images", task["result_path"])
+            if format in ["markdown", "both"]:
+                md = next(res_dir.rglob("result.md"), next(res_dir.rglob("*.md"), None))
+                if md:
+                    with open(md, "r", encoding="utf-8") as f:
+                        response["data"]["content"] = process_markdown_images_legacy(f.read(), md.parent / "images", task["result_path"])
             
-            if format in ["json", "both"] and json_files:
-                with open(json_files[0], "r", encoding="utf-8") as f:
-                    response["data"]["json_content"] = json.load(f)
+            if format in ["json", "both"]:
+                js = next((f for f in res_dir.rglob("*.json") if "_content_list.json" in f.name or f.name == "result.json"), None)
+                if js:
+                    with open(js, "r", encoding="utf-8") as f:
+                        response["data"]["json_content"] = json.load(f)
     return response
 
+
+# ✅ [核心重构] 实现真分页、搜索和筛选，移除了冗余 limit 参数
 @app.get("/api/v1/queue/tasks", tags=["队列管理"])
 async def list_tasks(
-    status: Optional[str] = Query(None),
-    backend: Optional[str] = Query(None),
-    search: Optional[str] = Query(None),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    status: Optional[str] = Query(None, description="筛选状态"),
+    backend: Optional[str] = Query(None, description="筛选后端引擎"),
+    search: Optional[str] = Query(None, description="搜索文件名或任务ID"),
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
     current_user: User = Depends(get_current_active_user),
 ):
     can_view_all = current_user.has_permission(Permission.TASK_VIEW_ALL)
-    conditions, params = [], []
-    if not can_view_all:
-        conditions.append("user_id = ?"), params.append(current_user.user_id)
-    if status:
-        conditions.append("status = ?"), params.append(status)
-    if backend:
-        conditions.append("backend = ?"), params.append(backend)
-    if search:
-        conditions.append("(file_name LIKE ? OR task_id = ?)"), params.append(f"%{search.strip()}%"), params.append(search.strip())
+    conds, params = [], []
 
-    where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+    if not can_view_all:
+        conds.append("user_id = ?"), params.append(current_user.user_id)
+    if status:
+        conds.append("status = ?"), params.append(status)
+    if backend:
+        conds.append("backend = ?"), params.append(backend)
+    if search:
+        search_term = f"%{search.strip()}%"
+        conds.append("(file_name LIKE ? OR task_id = ?)"), params.extend([search_term, search.strip()])
+
+    where = " WHERE " + " AND ".join(conds) if conds else ""
     offset = (page - 1) * page_size
+
     with db.get_cursor() as cursor:
-        cursor.execute(f"SELECT COUNT(*) FROM tasks{where_clause}", params)
+        cursor.execute(f"SELECT COUNT(*) FROM tasks{where}", params)
         total = cursor.fetchone()[0]
-        cursor.execute(f"SELECT * FROM tasks {where_clause} ORDER BY created_at DESC LIMIT ? OFFSET ?", params + [page_size, offset])
+        cursor.execute(f"SELECT * FROM tasks {where} ORDER BY created_at DESC LIMIT ? OFFSET ?", params + [page_size, offset])
         tasks = [dict(row) for row in cursor.fetchall()]
+
     return {"success": True, "total": total, "page": page, "page_size": page_size, "tasks": tasks, "can_view_all": can_view_all}
 
-@app.get("/api/v1/queue/stats", tags=["队列管理"])
-async def get_queue_stats(current_user: User = Depends(require_permission(Permission.QUEUE_VIEW))):
-    stats = db.get_queue_stats()
-    return {"success": True, "stats": stats, "total": sum(stats.values()), "timestamp": datetime.now().isoformat()}
-
-@app.post("/api/v1/admin/cleanup", tags=["系统管理"])
-async def cleanup_old_tasks(days: int = Query(7), current_user: User = Depends(require_permission(Permission.QUEUE_MANAGE))):
-    deleted_count = db.cleanup_old_task_records(days)
-    return {"success": True, "deleted_count": deleted_count}
-
-@app.post("/api/v1/admin/reset-stale", tags=["系统管理"])
-async def reset_stale_tasks(timeout_minutes: int = Query(60), current_user: User = Depends(require_permission(Permission.QUEUE_MANAGE))):
-    reset_count = db.reset_stale_tasks(timeout_minutes)
-    return {"success": True, "reset_count": reset_count}
 
 @app.get("/api/v1/engines", tags=["系统信息"])
 async def list_engines():
-    engines = {
-        "document": [
-            {"name": "pipeline", "display_name": "Standard Pipeline", "supported_formats": [".pdf", ".png", ".jpg", ".jpeg"]},
-            {"name": "vlm-auto-engine", "display_name": "MinerU 2.5 VLM", "supported_formats": [".pdf", ".png", ".jpg", ".jpeg"]},
-            {"name": "hybrid-auto-engine", "display_name": "Hybrid High-Precision", "supported_formats": [".pdf", ".png", ".jpg", ".jpeg"]}
-        ],
-        "ocr": [], "audio": [], "video": [], "format": [],
-        "office": [
-            {"name": "MarkItDown (快速)", "value": "auto", "supported_formats": [".docx", ".xlsx", ".pptx", ".doc", ".xls", ".ppt", ".html", ".txt", ".csv"]},
-            {"name": "LibreOffice + MinerU (完整)", "value": "auto", "supported_formats": [".docx", ".xlsx", ".pptx", ".doc", ".xls", ".ppt"]}
-        ]
-    }
     import importlib.util
+    ocr = []
     if importlib.util.find_spec("paddleocr_vl"):
-        engines["ocr"].append({"name": "paddleocr_vl", "display_name": "PaddleOCR-VL v1.5 (0.9B)", "supported_formats": [".pdf", ".png", ".jpg", ".jpeg"]})
+        ocr.append({"name": "paddleocr_vl", "display_name": "PaddleOCR-VL v1.5 (0.9B)"})
     if importlib.util.find_spec("paddleocr_vl_vllm"):
-        engines["ocr"].append({"name": "paddleocr-vl-vllm", "display_name": "PaddleOCR-VL v1.5 (0.9B) (vLLM)", "supported_formats": [".pdf", ".png", ".jpg", ".jpeg"]})
-    if importlib.util.find_spec("audio_engines"):
-        engines["audio"].append({"name": "sensevoice", "display_name": "SenseVoice", "supported_formats": [".wav", ".mp3", ".flac", ".m4a", ".ogg"]})
-    if importlib.util.find_spec("video_engines"):
-        engines["video"].append({"name": "video", "display_name": "Video Processing", "supported_formats": [".mp4", ".avi", ".mkv", ".mov", ".flv", ".wmv"]})
-    return {"success": True, "engines": engines}
+        ocr.append({"name": "paddleocr-vl-vllm", "display_name": "PaddleOCR-VL v1.5 (0.9B) (vLLM)"}) # ✅ 严谨标注 0.9B
+    
+    return {
+        "success": True,
+        "engines": {
+            "document": [
+                {"name": "pipeline", "display_name": "Standard Pipeline"},
+                {"name": "vlm-auto-engine", "display_name": "MinerU 2.5 VLM"},
+                {"name": "hybrid-auto-engine", "display_name": "Hybrid High-Precision"}
+            ],
+            "ocr": ocr,
+            "audio": [{"name": "sensevoice", "display_name": "SenseVoice"}],
+            "video": [{"name": "video", "display_name": "Video Processing"}]
+        }
+    }
+
 
 @app.get("/api/v1/health", tags=["系统信息"])
 async def health_check():
@@ -303,27 +275,24 @@ async def health_check():
     except Exception as e:
         return JSONResponse(status_code=503, content={"status": "unhealthy", "error": str(e)})
 
-@app.get("/v1/files/output/{file_path:path}", tags=["文件服务"])
-async def serve_output_file(file_path: str):
-    try:
-        full_path = (OUTPUT_DIR / unquote(file_path)).resolve()
-        if not str(full_path).startswith(str(OUTPUT_DIR.resolve())) or not full_path.is_file():
-            raise HTTPException(status_code=404)
-        media_type, _ = mimetypes.guess_type(full_path)
-        return FileResponse(path=str(full_path), media_type=media_type or "application/octet-stream", filename=full_path.name)
-    except: raise HTTPException(status_code=500)
 
-@app.get("/v1/files/upload/{file_path:path}", tags=["文件服务"])
-async def serve_upload_file(file_path: str):
+# ✅ [优化] 合并文件服务逻辑，支持 URL 解码与 MIME 识别预览
+@app.get("/v1/files/{file_type}/{file_path:path}", tags=["文件服务"])
+async def serve_file(file_type: str, file_path: str):
+    root = OUTPUT_DIR if file_type == "output" else UPLOAD_DIR
     try:
-        full_path = (UPLOAD_DIR / unquote(file_path)).resolve()
-        if not str(full_path).startswith(str(UPLOAD_DIR.resolve())) or not full_path.is_file():
-            raise HTTPException(status_code=404)
-        media_type, _ = mimetypes.guess_type(full_path)
-        return FileResponse(path=str(full_path), media_type=media_type or "application/octet-stream", filename=full_path.name)
-    except: raise HTTPException(status_code=500)
+        full_path = (root / unquote(file_path)).resolve()
+        if not str(full_path).startswith(str(root.resolve())) or not full_path.is_file():
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        mtype, _ = mimetypes.guess_type(full_path)
+        return FileResponse(path=str(full_path), media_type=mtype or "application/octet-stream", filename=full_path.name)
+    except Exception as e:
+        if isinstance(e, HTTPException): raise e
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 if __name__ == "__main__":
     api_port = int(os.getenv("API_PORT", "8000"))
-    logger.info(f"🚀 Starting Tianshu API Server on port {api_port}...")
+    logger.info(f"🚀 MinerU Tianshu API Server starting on port {api_port}...")
     uvicorn.run(app, host="0.0.0.0", port=api_port)
