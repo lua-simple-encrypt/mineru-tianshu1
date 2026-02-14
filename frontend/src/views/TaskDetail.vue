@@ -172,16 +172,12 @@ const layoutMode = ref<'single' | 'split'>('split')
 
 // 计算 PDF 的 URL
 const pdfUrl = computed(() => {
-  // 1. 优先显示后端生成的 MinerU 布局预览 PDF
-  // task.data.pdf_path 通常格式为 "uuid/filename_layout.pdf"
   if (task.value?.data?.pdf_path) {
-    // 核心修复：直接使用路径，不使用 encodeURIComponent。
-    // 后端返回的 pdf_path 已经是编码过的安全路径，且包含路径分隔符。
-    // 如果再次编码，"/" 会变成 "%2F"，导致后端 404。
+    // ✅ 核心修复：直接使用路径，不使用 encodeURIComponent
+    // 后端已通过 unquote + lstrip("/") 处理所有编码和前缀问题，如果再次编码会导致 404
     return `/api/v1/files/output/${task.value.data.pdf_path}`
   }
   
-  // 2. 回退显示上传的源文件
   if (task.value?.source_url) {
     return task.value.source_url
   }
@@ -191,7 +187,7 @@ const pdfUrl = computed(() => {
 
 let stopPolling: (() => void) | null = null
 
-async function refreshTask(format: 'markdown' | 'json' | 'both' = 'markdown') {
+async function refreshTask() {
   loading.value = true
   error.value = ''
   try {
@@ -213,18 +209,18 @@ function downloadMarkdown() {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
+  // ✅ 优化：优先使用后端返回的文件名，没有则使用 task ID
   a.download = task.value.data.markdown_file || `${taskId.value}.md`
   a.click()
   URL.revokeObjectURL(url)
 }
 
 onMounted(async () => {
-  await refreshTask('both')
+  await refreshTask()
   
-  // 自动轮询
   if (task.value && ['pending', 'processing'].includes(task.value.status)) {
-    stopPolling = taskStore.pollTaskStatus(taskId.value, 2000, async (updatedTask) => {
-      // 任务结束时停止轮询
+    // ✅ 核心优化：轮询间隔增加到 5000ms (5秒)，大幅降低后端并发压力
+    stopPolling = taskStore.pollTaskStatus(taskId.value, 5000, (updatedTask) => {
       if (['completed', 'failed', 'cancelled'].includes(updatedTask.status)) {
         if (stopPolling) stopPolling()
       }
