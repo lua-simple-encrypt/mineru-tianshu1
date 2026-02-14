@@ -17,7 +17,7 @@
       </div>
 
       <div class="flex items-center gap-3">
-        <div v-if="task?.status === 'completed' && task?.data?.pdf_path" class="flex items-center bg-gray-100 rounded-lg p-1">
+        <div v-if="task?.status === 'completed' && pdfUrl" class="flex items-center bg-gray-100 rounded-lg p-1">
           <button
             @click="layoutMode = 'single'"
             :class="['px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center', layoutMode === 'single' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700']"
@@ -168,20 +168,20 @@ const loading = ref(false)
 const error = ref('')
 
 const activeTab = ref<'markdown' | 'json'>('markdown')
-const layoutMode = ref<'single' | 'split'>('split') // 默认开启分屏
+const layoutMode = ref<'single' | 'split'>('split')
 
-// 计算 PDF 的 URL
+// 计算 PDF 的 URL (✅ 核心修复：路径逻辑)
 const pdfUrl = computed(() => {
-  // 1. 优先显示后端生成的预览 PDF (如 _layout.pdf)
-  // 这是 MinerU 生成的带有布局框的 PDF，用于对照查看
+  // 1. 优先显示后端生成的 MinerU 布局预览 PDF
+  // task.data.pdf_path 通常格式为 "uuid/filename_layout.pdf"
   if (task.value?.data?.pdf_path) {
-    // 必须对路径进行编码，处理中文文件名
-    const encodedPath = encodeURIComponent(task.value.data.pdf_path)
-    return `/api/v1/files/output/${encodedPath}`
+    // ❌ [删除旧代码] const encodedPath = encodeURIComponent(task.value.data.pdf_path)
+    // ✅ [修复] 直接使用路径。浏览器会自动处理非 ASCII 字符，但保留 "/" 作为路径分隔符。
+    // 如果使用 encodeURIComponent，"/" 会变成 "%2F"，导致后端无法正确路由。
+    return `/api/v1/files/output/${task.value.data.pdf_path}`
   }
   
-  // 2. 回退显示源文件 (修复 Bug：之前如果任务未完成或无 layout pdf，这里会返回 null)
-  // source_url 是上传文件的直接访问地址
+  // 2. 回退显示上传的源文件
   if (task.value?.source_url) {
     return task.value.source_url
   }
@@ -195,7 +195,7 @@ async function refreshTask(format: 'markdown' | 'json' | 'both' = 'markdown') {
   loading.value = true
   error.value = ''
   try {
-    await taskStore.fetchTaskStatus(taskId.value, false, 'both') // 强制获取 both 以便支持 tab 切换
+    await taskStore.fetchTaskStatus(taskId.value, false, 'both')
   } catch (err: any) {
     error.value = err.message || $t('task.loadFailed')
   } finally {
@@ -224,7 +224,7 @@ onMounted(async () => {
   // 自动轮询
   if (task.value && ['pending', 'processing'].includes(task.value.status)) {
     stopPolling = taskStore.pollTaskStatus(taskId.value, 2000, async (updatedTask) => {
-      // 只有在变成完成或失败/取消时才停止轮询
+      // 任务结束时停止轮询
       if (['completed', 'failed', 'cancelled'].includes(updatedTask.status)) {
         if (stopPolling) stopPolling()
       }
@@ -238,7 +238,7 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-/* 自定义滚动条样式，防止双滚动条太丑 */
+/* 自定义滚动条样式 */
 .custom-scrollbar::-webkit-scrollbar {
   width: 8px;
   height: 8px;
