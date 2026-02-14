@@ -7,12 +7,12 @@
       </div>
       
       <div class="flex flex-wrap items-center gap-3">
-        <label class="flex items-center cursor-pointer bg-white px-3 py-2 rounded-lg border border-gray-200 shadow-sm hover:bg-gray-50 transition-colors" title="开启后每5秒刷新一次">
+        <label class="flex items-center cursor-pointer bg-white px-3 py-2 rounded-lg border border-gray-200 shadow-sm hover:bg-gray-50 transition-colors" :title="$t('common.autoRefreshLabel')">
           <input type="checkbox" v-model="autoRefresh" class="sr-only">
           <div class="relative w-8 h-4 transition-colors rounded-full" :class="autoRefresh ? 'bg-green-500' : 'bg-gray-300'">
             <div class="absolute left-0.5 top-0.5 w-3 h-3 bg-white rounded-full transition-transform shadow-sm" :class="autoRefresh ? 'translate-x-4' : 'translate-x-0'"></div>
           </div>
-          <span class="ml-2 text-xs font-medium text-gray-600 select-none">自动刷新</span>
+          <span class="ml-2 text-xs font-medium text-gray-600 select-none">{{ $t('common.autoRefreshLabel') }}</span>
         </label>
 
         <button
@@ -61,20 +61,20 @@
               class="w-full pl-3 pr-8 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm appearance-none"
             >
               <option value="">{{ $t('task.allStatus') }}</option>
-              <optgroup label="MinerU Documents">
+              <optgroup :label="$t('task.groupMinerU')">
                 <option value="pipeline">Pipeline (Standard)</option>
                 <option value="vlm-auto-engine">VLM Auto (Visual)</option>
                 <option value="hybrid-auto-engine">Hybrid (High Prec.)</option>
               </optgroup>
-              <optgroup label="OCR / Text">
+              <optgroup :label="$t('task.groupPaddleOCR')">
                 <option value="paddleocr-vl">PaddleOCR-VL</option>
                 <option value="paddleocr-vl-vllm">PaddleOCR-VL-VLLM</option>
               </optgroup>
-              <optgroup label="Audio / Video">
+              <optgroup :label="$t('task.groupAudioVideo')">
                 <option value="sensevoice">SenseVoice (Audio)</option>
                 <option value="video">Video Processing</option>
               </optgroup>
-              <optgroup label="Bio / Science">
+              <optgroup :label="$t('task.groupProfessional')">
                 <option value="fasta">FASTA</option>
                 <option value="genbank">GenBank</option>
               </optgroup>
@@ -90,7 +90,7 @@
               v-model="filters.search"
               @input="applyFilters"
               type="text"
-              :placeholder="$t('common.search') + ' (Filename / ID)'"
+              :placeholder="$t('common.search') + ' (' + $t('task.fileName') + ' / ID)'"
               class="w-full pl-9 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm"
             >
             <Search class="absolute left-3 top-2.5 w-4 h-4 text-gray-400 pointer-events-none" />
@@ -104,7 +104,7 @@
       <div v-if="selectedTasks.length > 0" class="bg-blue-50 px-6 py-2 border-b border-blue-100 flex items-center justify-between transition-all animate-fade-in">
         <div class="flex items-center text-blue-800 text-sm font-medium">
           <CheckSquare class="w-4 h-4 mr-2" />
-          已选择 {{ selectedTasks.length }} 项
+          {{ $t('common.selected') }} {{ selectedTasks.length }} {{ $t('common.items') }}
         </div>
         <div class="flex gap-2">
           <button
@@ -112,13 +112,13 @@
             class="text-red-600 hover:text-red-700 hover:bg-red-100 px-3 py-1.5 rounded-md text-xs font-medium transition-colors flex items-center"
           >
             <XCircle class="w-4 h-4 mr-1.5" />
-            批量取消
+            {{ $t('task.batchCancel') }}
           </button>
           <button
             @click="selectedTasks = []"
             class="text-gray-500 hover:text-gray-700 hover:bg-white px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
           >
-            取消选择
+            {{ $t('common.deselect') }}
           </button>
         </div>
       </div>
@@ -131,10 +131,10 @@
         <div class="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mb-4">
           <FileQuestion class="w-8 h-8 text-gray-400" />
         </div>
-        <p class="text-lg font-medium text-gray-900">暂无任务</p>
-        <p class="text-sm mt-1">没有找到符合条件的任务记录</p>
+        <p class="text-lg font-medium text-gray-900">{{ $t('task.noTasks') }}</p>
+        <p class="text-sm mt-1">{{ $t('task.noMatchingTasks') }}</p>
         <button @click="clearFilters" class="mt-4 text-primary-600 hover:text-primary-700 text-sm font-medium hover:underline">
-          清除筛选条件
+          {{ $t('task.clearFilters') }}
         </button>
       </div>
 
@@ -160,7 +160,7 @@
                 {{ $t('task.backend') }}
               </th>
               <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                时间信息
+                {{ $t('task.basicInfo') }}
               </th>
               <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                 {{ $t('task.actions') }}
@@ -193,7 +193,7 @@
                     </div>
                     <div class="text-xs text-gray-400 font-mono mt-0.5 flex items-center">
                       {{ task.task_id }}
-                      <button @click="copyToClipboard(task.task_id)" class="ml-1.5 opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 hover:text-primary-600" title="复制 ID">
+                      <button @click="copyToClipboard(task.task_id)" class="ml-1.5 opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 hover:text-primary-600" :title="$t('task.copyTaskId')">
                         <Copy class="w-3 h-3" />
                       </button>
                     </div>
@@ -212,7 +212,7 @@
                 <div class="flex flex-col">
                   <span>{{ formatRelativeTime(task.created_at) }}</span>
                   <span v-if="task.completed_at" class="text-xs text-gray-400 mt-0.5">
-                    耗时: {{ formatDuration(task.created_at, task.completed_at) }}
+                    {{ $t('common.duration') }}: {{ formatDuration(task.created_at, task.completed_at) }}
                   </span>
                 </div>
               </td>
@@ -221,7 +221,7 @@
                   <router-link
                     :to="`/tasks/${task.task_id}`"
                     class="text-gray-500 hover:text-primary-600 transition-colors p-1.5 rounded hover:bg-primary-50"
-                    title="查看详情"
+                    :title="$t('task.viewDetail')"
                   >
                     <Eye class="w-4 h-4" />
                   </router-link>
@@ -230,7 +230,7 @@
                     v-if="task.status === 'pending'"
                     @click="cancelTask(task.task_id)"
                     class="text-gray-500 hover:text-red-600 transition-colors p-1.5 rounded hover:bg-red-50"
-                    title="取消任务"
+                    :title="$t('task.cancelTask')"
                   >
                     <XCircle class="w-4 h-4" />
                   </button>
@@ -244,7 +244,7 @@
 
       <div v-if="filteredTasks.length > 0" class="bg-gray-50 px-6 py-4 border-t border-gray-200 flex items-center justify-between">
         <div class="text-sm text-gray-500 hidden sm:block">
-          显示 {{ (currentPage - 1) * pageSize + 1 }} 到 {{ Math.min(currentPage * pageSize, filteredTasks.length) }} 条，共 {{ filteredTasks.length }} 条
+           {{ $t('common.pagination', { start: (currentPage - 1) * pageSize + 1, end: Math.min(currentPage * pageSize, filteredTasks.length), total: filteredTasks.length }) }}
         </div>
         <div class="flex gap-2 w-full sm:w-auto justify-between sm:justify-end">
           <button
@@ -282,6 +282,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useTaskStore } from '@/stores'
+import { useI18n } from 'vue-i18n'
 import { formatRelativeTime, formatBackendName, formatDuration } from '@/utils/format'
 import StatusBadge from '@/components/StatusBadge.vue'
 import LoadingSpinner from '@/components/LoadingSpinner.vue'
@@ -293,6 +294,7 @@ import {
 } from 'lucide-vue-next'
 import type { TaskStatus, Backend } from '@/api/types'
 
+const { t } = useI18n()
 const taskStore = useTaskStore()
 
 const tasks = computed(() => taskStore.tasks)
@@ -417,7 +419,7 @@ const taskToCancel = ref<string | string[]>('')
 
 async function cancelTask(taskId: string) {
   taskToCancel.value = taskId
-  cancelDialogMessage.value = '确定要取消这个任务吗？'
+  cancelDialogMessage.value = t('task.confirmCancel')
   showCancelDialog.value = true
 }
 
@@ -428,12 +430,12 @@ async function batchCancel() {
   })
 
   if (pendingTasks.length === 0) {
-    alert('选中的任务中没有等待状态(Pending)的任务，无法执行取消操作。')
+    alert(t('task.noPendingTasksToCancel'))
     return
   }
 
   taskToCancel.value = pendingTasks
-  cancelDialogMessage.value = `确定要取消这 ${pendingTasks.length} 个任务吗？`
+  cancelDialogMessage.value = t('task.confirmBatchCancel', { count: pendingTasks.length })
   showCancelDialog.value = true
 }
 
