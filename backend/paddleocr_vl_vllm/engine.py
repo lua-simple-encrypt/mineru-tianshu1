@@ -8,7 +8,7 @@ PaddleOCR-VL-VLLM 解析引擎
 重要提示：
 - PaddleOCR-VL-VLLM 仅支持 GPU 推理，不支持 CPU 及 Arm 架构
 - GPU 要求：Compute Capability ≥ 8.5 (RTX 3090, A10, A100, H100 等)
-- 支持本地模型加载（/app/models/paddlex/）或自动下载（持久化到 /root/.paddlex）
+- 支持本地模型加载（/root/.paddlex/official_models/）或自动下载
 """
 
 import os
@@ -167,23 +167,20 @@ class PaddleOCRVLVLLMEngine:
                 # =========================================================================
                 # 智能路径解析逻辑 (适配 Docker 持久化挂载)
                 # =========================================================================
-                # 1. 优先检查 Docker 挂载的 PADDLEX_HOME 环境变量
-                pdx_home = os.environ.get("PADDLEX_HOME")
-                if pdx_home:
-                    logger.info(f"💾 Using PADDLEX_HOME from env: {pdx_home}")
+                # 1. 获取 PADDLEX_HOME 环境变量，默认指向 /root/.paddlex
+                pdx_home = os.environ.get("PADDLEX_HOME", "/root/.paddlex")
+                logger.info(f"💾 Using PADDLEX_HOME: {pdx_home}")
                 
-                # 2. 定义手动模型目录
-                base_model_dir = Path("/app/models/paddlex")
+                # 2. 修正为真实的 PaddleX 官方模型缓存目录
+                base_model_dir = Path(pdx_home) / "official_models"
                 local_model_path = base_model_dir / self.model_name
                 
-                # PaddleOCRVL 目前版本似乎不直接接受 model_dir 参数作为本地路径
-                # 它依赖环境变量 PADDLEX_HOME 去查找或下载模型
-                # 但我们还是要检查一下本地是否有模型，以便输出日志
+                # 探测本地是否有模型，以便输出准确的日志
                 if local_model_path.exists() and local_model_path.is_dir() and any(local_model_path.iterdir()):
                     logger.info(f"📂 Found local model cache: {local_model_path}")
                 else:
-                    logger.info(f"🌐 Local model not found at {local_model_path}")
-                    logger.info(f"   Will use auto-download to: {pdx_home if pdx_home else 'Default Cache'}")
+                    logger.warning(f"🌐 Local model not found at {local_model_path}")
+                    logger.info("   Will attempt auto-download...")
 
                 # 初始化 PaddleOCRVL
                 # 注意：PaddleOCRVL 内部会使用 PADDLEX_HOME 环境变量来决定下载/加载位置
