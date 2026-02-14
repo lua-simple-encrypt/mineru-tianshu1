@@ -19,7 +19,7 @@ from typing import Optional
 from urllib.parse import quote, unquote
 
 import uvicorn
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query, Depends
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query, Depends, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from loguru import logger
@@ -161,6 +161,8 @@ def process_markdown_images_legacy(md_content: str, image_dir: Path, result_path
                 # ✅ [修复 Bug] url 编码需保留正斜杠，防止 404
                 encoded_relative_path = quote(relative_path, safe="/")
                 encoded_filename = quote(image_filename, safe="/")
+                
+                # 统一使用 /api/v1 前缀，稍后通过 Router 注册兼容 Nginx
                 static_url = f"/api/v1/files/output/{encoded_relative_path}/images/{encoded_filename}"
 
                 # 返回替换后的内容
@@ -198,7 +200,16 @@ async def root():
     }
 
 
-@app.post("/api/v1/tasks/submit", tags=["任务管理"])
+# ============================================================================
+# 创建 API Router (核心修复：解决 Nginx 路径剥离问题)
+# ============================================================================
+# 所有的业务接口都挂载到 router 上，然后注册两次：
+# 1. /api/v1 (完整路径)
+# 2. /v1 (Nginx 剥离后路径)
+router = APIRouter()
+
+
+@router.post("/tasks/submit", tags=["任务管理"])
 async def submit_task(
     file: UploadFile = File(..., description="文件: PDF/图片/Office/HTML/音频/视频等多种格式"),
     backend: str = Form(
@@ -260,9 +271,6 @@ async def submit_task(
 ):
     """
     提交文档解析任务
-
-    需要认证和 TASK_SUBMIT 权限。
-    立即返回 task_id，任务在后台异步处理。
     """
     try:
         # 生成唯一的文件名（避免冲突）
@@ -283,16 +291,10 @@ async def submit_task(
             "method": method,
             "formula_enable": formula_enable,
             "table_enable": table_enable,
-            
-            # 分页与模式
             "start_page": start_page,
             "end_page": end_page,
             "force_ocr": force_ocr,
-            
-            # 远程服务
             "server_url": server_url,
-
-            # MinerU 调试/输出选项 (标准化名称)
             "draw_layout_bbox": draw_layout_bbox,
             "draw_span_bbox": draw_span_bbox,
             "dump_markdown": dump_markdown,
@@ -300,30 +302,20 @@ async def submit_task(
             "dump_model_output": dump_model_output,
             "dump_content_list": dump_content_list,
             "dump_orig_pdf": dump_orig_pdf,
-            
-            # 兼容旧参数 (如果 Worker 还在用旧名称)
             "draw_layout": draw_layout,
             "draw_span": draw_span,
-            
-            # 视频处理参数
             "keep_audio": keep_audio,
             "enable_keyframe_ocr": enable_keyframe_ocr,
             "ocr_backend": ocr_backend,
             "keep_keyframes": keep_keyframes,
-            
-            # 音频处理参数
             "enable_speaker_diarization": enable_speaker_diarization,
-            
-            # 水印去除参数
             "remove_watermark": remove_watermark,
             "watermark_conf_threshold": watermark_conf_threshold,
             "watermark_dilation": watermark_dilation,
-            
-            # Office 转 PDF 参数
             "convert_office_to_pdf": convert_office_to_pdf,
         }
 
-        # 创建任务（PDF 拆分逻辑由 Worker 处理）
+        # 创建任务
         task_id = db.create_task(
             file_name=file.filename,
             file_path=str(temp_file_path),
@@ -334,10 +326,6 @@ async def submit_task(
         )
 
         logger.info(f"✅ Task submitted: {task_id} - {file.filename}")
-        logger.info(f"    User: {current_user.username} ({current_user.role.value})")
-        logger.info(f"    Backend: {backend}")
-        logger.info(f"    Priority: {priority}")
-
         return {
             "success": True,
             "task_id": task_id,
@@ -353,29 +341,22 @@ async def submit_task(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/v1/tasks/{task_id}", tags=["任务管理"])
+@router.get("/tasks/{task_id}", tags=["任务管理"])
 async def get_task_status(
     task_id: str,
-    upload_images: bool = Query(False, description="【已废弃】图片已自动上传到 RustFS，此参数保留仅用于向后兼容"),
+    upload_images: bool = Query(False, description="【已废弃】图片已自动上传到 RustFS"),
     format: str = Query("markdown", description="返回格式: markdown(默认)/json/both"),
     current_user: User = Depends(get_current_active_user),
 ):
     """
     查询任务状态和详情
-
-    需要认证。用户只能查看自己的任务，管理员可以查看所有任务。
-    当任务完成时，会自动返回解析后的内容（data 字段）
-    - format=markdown: 只返回 Markdown 内容（默认）
-    - format=json: 只返回 JSON 结构化数据（MinerU 和 PaddleOCR-VL 支持）
-    - format=both: 同时返回 Markdown 和 JSON
-    可选择是否上传图片到 MinIO 并替换为 URL
     """
     task = db.get_task(task_id)
 
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    # 权限检查: 用户只能查看自己的任务，管理员/经理可以查看所有任务
+    # 权限检查
     if not current_user.has_permission(Permission.TASK_VIEW_ALL):
         if task.get("user_id") != current_user.user_id:
             raise HTTPException(status_code=403, detail="Permission denied: You can only view your own tasks")
@@ -384,22 +365,19 @@ async def get_task_status(
     source_url = None
     if task.get("file_path"):
         try:
-            # 提取文件名 (task['file_path'] 是绝对路径)
             source_filename = Path(task["file_path"]).name
-            # 编码文件名，防止中文乱码
             encoded_source_filename = quote(source_filename)
-            # ✅ [修复 Bug] 补齐 /api 前缀，匹配底部正确的文件路由
+            # 始终返回完整路径 /api/v1/... 前端使用方便
             source_url = f"/api/v1/files/upload/{encoded_source_filename}"
         except Exception as e:
             logger.warning(f"Failed to generate source_url: {e}")
-    # =========================
 
     response = {
         "success": True,
         "task_id": task_id,
         "status": task["status"],
         "file_name": task["file_name"],
-        "source_url": source_url,  # 新增字段：源文件下载链接
+        "source_url": source_url,
         "backend": task["backend"],
         "priority": task["priority"],
         "error_message": task["error_message"],
@@ -409,24 +387,19 @@ async def get_task_status(
         "user_id": task.get("user_id"),
     }
 
-    # ✅ [逻辑优化建议] 仅在不是父任务时，暴露具体的 worker 执行信息
     if not task.get("is_parent"):
         response["worker_id"] = task.get("worker_id")
         response["retry_count"] = task.get("retry_count")
 
-    # 如果是主任务,添加子任务进度信息
     if task.get("is_parent"):
         child_count = task.get("child_count", 0)
         child_completed = task.get("child_completed", 0)
-
         response["is_parent"] = True
         response["subtask_progress"] = {
             "total": child_count,
             "completed": child_completed,
             "percentage": round(child_completed / child_count * 100, 1) if child_count > 0 else 0,
         }
-
-        # 可选: 返回所有子任务状态
         try:
             children = db.get_child_tasks(task_id)
             response["subtasks"] = [
@@ -438,53 +411,31 @@ async def get_task_status(
                 }
                 for child in children
             ]
-            logger.info(f"✅ Parent task status: {task['status']} - Progress: {child_completed}/{child_count} subtasks")
         except Exception as e:
             logger.warning(f"⚠️  Failed to load subtasks: {e}")
 
-    else:
-        logger.info(f"✅ Task status: {task['status']} - (result_path: {task.get('result_path')})")
-
-    # 如果任务已完成，尝试返回解析内容
     if task["status"] == "completed":
         if not task["result_path"]:
-            # 结果文件已被清理
             response["data"] = None
-            response["message"] = "Task completed but result files have been cleaned up (older than retention period)"
+            response["message"] = "Task completed but result files have been cleaned up"
             return response
 
         result_dir = Path(task["result_path"])
-        logger.info(f"📂 Checking result directory: {result_dir}")
-
         if result_dir.exists():
-            logger.info("✅ Result directory exists")
-            # 递归查找 Markdown 文件（MinerU 输出结构：task_id/filename/auto/*.md）
             md_files = list(result_dir.rglob("*.md"))
-            
-            # 递归查找 JSON 文件
-            # MinerU 输出格式: {filename}_content_list.json (主要的结构化内容)
-            # 也支持其他引擎的: content.json, result.json
             json_files = [
-                f
-                for f in result_dir.rglob("*.json")
+                f for f in result_dir.rglob("*.json")
                 if not f.parent.name.startswith("page_")
                 and (f.name in ["content.json", "result.json"] or "_content_list.json" in f.name)
             ]
-            logger.info(f"📄 Found {len(md_files)} markdown files and {len(json_files)} json files")
-
+            
             if md_files or json_files:
                 try:
-                    # 初始化 data 字段
                     response["data"] = {}
-
-                    # 标记 JSON 是否可用
                     response["data"]["json_available"] = len(json_files) > 0
                     
-                    # 查找 PDF 预览文件 (Layout/Span debug pdf 或 原始文件)
-                    # MinerU 默认生成 {filename}_layout.pdf
                     pdf_files = list(result_dir.rglob("*.pdf"))
                     preview_pdf = None
-                    # 优先级: _layout.pdf > _span.pdf > 任意 pdf (排除 page_*)
                     for pdf in pdf_files:
                         if "_layout.pdf" in pdf.name:
                             preview_pdf = pdf
@@ -494,23 +445,21 @@ async def get_task_status(
                              if "_span.pdf" in pdf.name:
                                  preview_pdf = pdf
                                  break
-                    # 如果找到了预览 PDF，生成其 URL
+                    if not preview_pdf:
+                        for pdf in pdf_files:
+                            if not pdf.name.startswith("page_"):
+                                preview_pdf = pdf
+                                break
+
                     if preview_pdf:
                         try:
-                             # 计算相对于 output 目录的路径
-                             # 假设 OUTPUT_DIR=/app/data/output, pdf=/app/data/output/taskid/...
                              rel_path = preview_pdf.relative_to(OUTPUT_DIR)
-                             # ✅ [修复 Bug] 编码路径时必须带有 safe="/"，否则导致斜杠被破坏报 404
                              encoded_path = quote(str(rel_path).replace("\\", "/"), safe="/")
                              response["data"]["pdf_path"] = encoded_path
-                             logger.info(f"📄 Found preview PDF: {preview_pdf.name}")
                         except ValueError:
-                             logger.warning(f"Preview PDF {preview_pdf} is not inside OUTPUT_DIR {OUTPUT_DIR}")
+                             pass
 
-
-                    # 根据 format 参数决定返回内容
                     if format in ["markdown", "both"] and md_files:
-                        # 选择主 Markdown 文件（优先 result.md）
                         md_file = None
                         for f in md_files:
                             if f.name == "result.md":
@@ -519,110 +468,73 @@ async def get_task_status(
                         if not md_file:
                             md_file = md_files[0]
 
-                        # 查找图片目录（Worker 已规范化为 images/）
                         image_dir = md_file.parent / "images"
-
-                        # 读取 Markdown 内容（Worker 已自动上传图片到 RustFS）
-                        logger.info(f"📖 Reading markdown file: {md_file}")
                         with open(md_file, "r", encoding="utf-8") as f:
                             md_content = f.read()
 
-                        logger.info(f"✅ Markdown content loaded, length: {len(md_content)} characters")
-
-                        # Worker 已自动上传图片到 RustFS 并替换 URL
-                        # 仅在兼容模式下处理（旧任务或 RustFS 失败）
                         if image_dir.exists() and ("http://" not in md_content and "https://" not in md_content):
-                            logger.warning("⚠️  Images not uploaded to RustFS, using legacy mode")
                             md_content = process_markdown_images_legacy(md_content, image_dir, task["result_path"])
-                        else:
-                            logger.debug("✅ Images already processed by Worker (RustFS URLs)")
 
-                        # 添加 Markdown 相关字段
                         response["data"]["markdown_file"] = md_file.name
                         response["data"]["content"] = md_content
                         response["data"]["has_images"] = image_dir.exists()
 
-                    # 如果用户请求 JSON 格式
                     if format in ["json", "both"] and json_files:
                         import json as json_lib
-
                         json_file = json_files[0]
-                        logger.info(f"📖 Reading JSON file: {json_file}")
                         try:
                             with open(json_file, "r", encoding="utf-8") as f:
                                 json_content = json_lib.load(f)
                             response["data"]["json_file"] = json_file.name
                             response["data"]["json_content"] = json_content
-                            logger.info("✅ JSON content loaded successfully")
                         except Exception as json_e:
                             logger.warning(f"⚠️  Failed to load JSON: {json_e}")
                     elif format == "json" and not json_files:
-                        # 用户请求 JSON 但没有 JSON 文件
-                        logger.warning("⚠️  JSON format requested but no JSON file available")
                         response["data"]["message"] = "JSON format not available for this backend"
 
-                    # 如果没有返回任何内容，添加提示
                     if not response["data"]:
                         response["data"] = None
-                        logger.warning(f"⚠️  No data returned for format: {format}")
-                    else:
-                        logger.info(f"✅ Response data field added successfully (format={format})")
 
                 except Exception as e:
                     logger.error(f"❌ Failed to read content: {e}")
-                    logger.exception(e)
-                    # 读取失败不影响状态查询，只是不返回 data
                     response["data"] = None
-            else:
-                logger.warning(f"⚠️  No markdown or json files found in {result_dir}")
         else:
             logger.error(f"❌ Result directory does not exist: {result_dir}")
-    else:
-        logger.info(f"ℹ️  Task status is {task['status']}, skipping content loading")
 
     return response
 
 
-@app.delete("/api/v1/tasks/{task_id}", tags=["任务管理"])
+@router.delete("/tasks/{task_id}", tags=["任务管理"])
 async def cancel_task(task_id: str, current_user: User = Depends(get_current_active_user)):
     """
     取消任务（仅限 pending 状态）
-
-    需要认证。用户只能取消自己的任务，管理员可以取消任何任务。
     """
     task = db.get_task(task_id)
 
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    # 权限检查: 用户只能取消自己的任务，管理员可以取消任何任务
     if not current_user.has_permission(Permission.TASK_DELETE_ALL):
         if task.get("user_id") != current_user.user_id:
             raise HTTPException(status_code=403, detail="Permission denied: You can only cancel your own tasks")
 
     if task["status"] == "pending":
         db.update_task_status(task_id, "cancelled")
-
-        # 删除临时文件
         file_path = Path(task["file_path"])
         if file_path.exists():
             file_path.unlink()
-
         logger.info(f"⏹️  Task cancelled: {task_id} by user {current_user.username}")
         return {"success": True, "message": "Task cancelled successfully"}
     else:
         raise HTTPException(status_code=400, detail=f"Cannot cancel task in {task['status']} status")
 
 
-@app.get("/api/v1/queue/stats", tags=["队列管理"])
+@router.get("/queue/stats", tags=["队列管理"])
 async def get_queue_stats(current_user: User = Depends(require_permission(Permission.QUEUE_VIEW))):
     """
     获取队列统计信息
-
-    需要认证和 QUEUE_VIEW 权限。
     """
     stats = db.get_queue_stats()
-
     return {
         "success": True,
         "stats": stats,
@@ -632,9 +544,9 @@ async def get_queue_stats(current_user: User = Depends(require_permission(Permis
     }
 
 
-@app.get("/api/v1/queue/tasks", tags=["队列管理"])
+@router.get("/queue/tasks", tags=["队列管理"])
 async def list_tasks(
-    status: Optional[str] = Query(None, description="筛选状态: pending/processing/completed/failed"),
+    status: Optional[str] = Query(None, description="筛选状态"),
     limit: int = Query(100, description="返回数量限制", le=1000),
     page: int = Query(1, ge=1, description="页码"),  
     page_size: int = Query(20, ge=1, le=100, description="每页数量"), 
@@ -643,23 +555,16 @@ async def list_tasks(
     current_user: User = Depends(get_current_active_user),
 ):
     """
-    获取任务列表（支持服务端分页、搜索和筛选）
-
-    需要认证。普通用户只能看到自己的任务，管理员/经理可以看到所有任务。
+    获取任务列表
     """
-    # 检查用户权限
     can_view_all = current_user.has_permission(Permission.TASK_VIEW_ALL)
-
-    # 1. 构建基础查询条件
     conditions = []
     params = []
 
-    # 权限控制: 如果不能查看所有，只能查看自己的
     if not can_view_all:
         conditions.append("user_id = ?")
         params.append(current_user.user_id)
 
-    # 筛选条件
     if status:
         conditions.append("status = ?")
         params.append(status)
@@ -667,29 +572,21 @@ async def list_tasks(
         conditions.append("backend = ?")
         params.append(backend)
     
-    # 搜索条件 (模糊匹配文件名 或 精确匹配ID)
     if search:
         search = search.strip()
         conditions.append("(file_name LIKE ? OR task_id = ?)")
         params.append(f"%{search}%")
         params.append(search)
 
-    # 组装 WHERE 子句
     where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
-
-    # 计算 offset
     offset = (page - 1) * page_size
 
     with db.get_cursor() as cursor:
-        # 2. 获取总数 (Count)
         count_sql = f"SELECT COUNT(*) FROM tasks{where_clause}"
         cursor.execute(count_sql, params)
         total = cursor.fetchone()[0]
 
-        # 3. 获取分页数据
-        # 添加分页参数到 params
         query_params = params + [page_size, offset]
-        
         data_sql = f"""
             SELECT * FROM tasks
             {where_clause}
@@ -701,55 +598,42 @@ async def list_tasks(
 
     return {
         "success": True, 
-        "total": total,          # 总记录数
-        "page": page,            # 当前页码
-        "page_size": page_size,  # 每页数量
-        "count": len(tasks),     # 当前页记录数
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "count": len(tasks),
         "tasks": tasks, 
         "can_view_all": can_view_all
     }
 
 
-@app.post("/api/v1/admin/cleanup", tags=["系统管理"])
+@router.post("/admin/cleanup", tags=["系统管理"])
 async def cleanup_old_tasks(
     days: int = Query(7, description="清理N天前的任务"),
     current_user: User = Depends(require_permission(Permission.QUEUE_MANAGE)),
 ):
     """
     清理旧任务（管理接口）
-
-    同时删除任务的所有相关文件和数据库记录：
-    - 上传的原始文件
-    - 结果文件夹（包括生成的文件和所有中间文件）
-    - 数据库记录
-
-    需要管理员权限。
     """
     deleted_count = db.cleanup_old_task_records(days)
-
-    logger.info(f"🧹 Cleaned up {deleted_count} old tasks (files and records) by {current_user.username}")
-
+    logger.info(f"🧹 Cleaned up {deleted_count} old tasks by {current_user.username}")
     return {
         "success": True,
         "deleted_count": deleted_count,
-        "message": f"Cleaned up {deleted_count} tasks older than {days} days (files and records deleted)",
+        "message": f"Cleaned up {deleted_count} tasks older than {days} days",
     }
 
 
-@app.post("/api/v1/admin/reset-stale", tags=["系统管理"])
+@router.post("/admin/reset-stale", tags=["系统管理"])
 async def reset_stale_tasks(
     timeout_minutes: int = Query(60, description="超时时间（分钟）"),
     current_user: User = Depends(require_permission(Permission.QUEUE_MANAGE)),
 ):
     """
     重置超时的 processing 任务（管理接口）
-
-    需要管理员权限。
     """
     reset_count = db.reset_stale_tasks(timeout_minutes)
-
     logger.info(f"🔄 Reset {reset_count} stale tasks by {current_user.username}")
-
     return {
         "success": True,
         "reset_count": reset_count,
@@ -757,12 +641,10 @@ async def reset_stale_tasks(
     }
 
 
-@app.get("/api/v1/engines", tags=["系统信息"])
+@router.get("/engines", tags=["系统信息"])
 async def list_engines():
     """
     列出所有可用的处理引擎
-
-    无需认证。返回系统中所有可用的处理引擎信息。
     """
     engines = {
         "document": [
@@ -795,76 +677,39 @@ async def list_engines():
                 "value": "auto",
                 "description": "Office 文档和文本文件转换引擎（快速但图片提取可能不完整）",
                 "supported_formats": [".docx", ".xlsx", ".pptx", ".doc", ".xls", ".ppt", ".html", ".txt", ".csv"],
-                "features": ["文本提取", "基础格式保留", "图片提取（DOCX）"],
-                "note": "推荐启用 convert_office_to_pdf 参数以获得更好的图片提取效果"
             },
             {
                 "name": "LibreOffice + MinerU (完整)",
                 "value": "auto",
                 "description": "将 Office 文件转为 PDF 后使用 MinerU 处理（慢但图片提取完整）",
                 "supported_formats": [".docx", ".xlsx", ".pptx", ".doc", ".xls", ".ppt"],
-                "features": ["完整格式保留", "完整图片提取", "表格识别", "公式识别"],
-                "requirement": "需要设置 convert_office_to_pdf=true"
             }
         ],
     }
 
-    # 动态检测可用引擎
     import importlib.util
 
     if importlib.util.find_spec("paddleocr_vl") is not None:
-        engines["ocr"].append(
-            {
-                "name": "paddleocr_vl",
-                "display_name": "PaddleOCR-VL v1.5 (0.9B)", 
-                "description": "PaddlePaddle 视觉语言 OCR 引擎 v1.5 (0.9B)",
-                "supported_formats": [".pdf", ".png", ".jpg", ".jpeg"],
-            }
-        )
+        engines["ocr"].append({"name": "paddleocr_vl", "display_name": "PaddleOCR-VL v1.5 (0.9B)", "supported_formats": [".pdf", ".png", ".jpg", ".jpeg"]})
 
     if importlib.util.find_spec("paddleocr_vl_vllm") is not None:
-        engines["ocr"].append(
-            {
-                "name": "paddleocr-vl-vllm",
-                "display_name": "PaddleOCR-VL v1.5 (0.9B) (vLLM)", 
-                "description": "基于 vLLM 的高性能 PaddleOCR-VL v1.5 (0.9B) 引擎",
-                "supported_formats": [".pdf", ".png", ".jpg", ".jpeg"],
-            }
-        )
+        engines["ocr"].append({"name": "paddleocr-vl-vllm", "display_name": "PaddleOCR-VL v1.5 (0.9B) (vLLM)", "supported_formats": [".pdf", ".png", ".jpg", ".jpeg"]})
 
     if importlib.util.find_spec("audio_engines") is not None:
-        engines["audio"].append(
-            {
-                "name": "sensevoice",
-                "display_name": "SenseVoice",
-                "description": "语音识别引擎，支持多语言自动检测",
-                "supported_formats": [".wav", ".mp3", ".flac", ".m4a", ".ogg"],
-            }
-        )
+        engines["audio"].append({"name": "sensevoice", "display_name": "SenseVoice", "supported_formats": [".wav", ".mp3", ".flac", ".m4a", ".ogg"]})
 
     if importlib.util.find_spec("video_engines") is not None:
-        engines["video"].append(
-            {
-                "name": "video",
-                "display_name": "Video Processing",
-                "description": "视频处理引擎，支持关键帧提取和音频转录",
-                "supported_formats": [".mp4", ".avi", ".mkv", ".mov", ".flv", ".wmv"],
-            }
-        )
+        engines["video"].append({"name": "video", "display_name": "Video Processing", "supported_formats": [".mp4", ".avi", ".mkv", ".mov", ".flv", ".wmv"]})
 
-    # 专业格式引擎
     try:
         from format_engines import FormatEngineRegistry
-
         for engine_info in FormatEngineRegistry.list_engines():
-            engines["format"].append(
-                {
-                    "name": engine_info["name"],
-                    "display_name": engine_info["name"].upper(),
-                    "description": engine_info["description"],
-                    "supported_formats": engine_info["extensions"],
-                }
-            )
+            engines["format"].append({
+                "name": engine_info["name"],
+                "display_name": engine_info["name"].upper(),
+                "description": engine_info["description"],
+                "supported_formats": engine_info["extensions"],
+            })
     except ImportError:
         pass
 
@@ -875,15 +720,13 @@ async def list_engines():
     }
 
 
-@app.get("/api/v1/health", tags=["系统信息"])
+@router.get("/health", tags=["系统信息"])
 async def health_check():
     """
     健康检查接口
     """
     try:
-        # 检查数据库连接
         stats = db.get_queue_stats()
-
         return {
             "status": "healthy",
             "timestamp": datetime.now().isoformat(),
@@ -898,9 +741,7 @@ async def health_check():
 # ============================================================================
 # 自定义文件服务（统一接口，支持 URL 编码与 MIME 识别）
 # ============================================================================
-# ✅ [核心修复] 补齐 /api 前缀，使路由一致，解决前端源文档、预览加载报 404 错误
-# ✅ [核心修复] 将合并后的接口还原为您原来的独立路由，方便不同目录的细粒度权限控制
-@app.get("/api/v1/files/output/{file_path:path}", tags=["文件服务"])
+@router.get("/files/output/{file_path:path}", tags=["文件服务"])
 async def serve_output_file(file_path: str):
     """提供输出文件的访问服务"""
     try:
@@ -932,7 +773,7 @@ async def serve_output_file(file_path: str):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@app.get("/api/v1/files/upload/{file_path:path}", tags=["文件服务"])
+@router.get("/files/upload/{file_path:path}", tags=["文件服务"])
 async def serve_upload_file(file_path: str):
     """提供上传源文件的访问服务"""
     try:
@@ -964,9 +805,15 @@ async def serve_upload_file(file_path: str):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+# ============================================================================
+# 注册双重路由
+# ============================================================================
+app.include_router(router, prefix="/api/v1")
+app.include_router(router, prefix="/v1")
+
+
 logger.info(f"📁 File service mounted: /api/v1/files/output -> {OUTPUT_DIR}")
 logger.info(f"📁 File service mounted: /api/v1/files/upload -> {UPLOAD_DIR}")
-logger.info("   Frontend can access images via: /api/v1/files/output/{task_id}/images/xxx.jpg")
 
 if __name__ == "__main__":
     # 从环境变量读取端口，默认为8000
