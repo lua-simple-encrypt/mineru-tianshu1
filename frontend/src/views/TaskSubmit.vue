@@ -86,6 +86,7 @@
             <hr class="border-gray-100" />
 
             <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+              
               <div class="col-span-1 md:col-span-2">
                 <label class="block text-sm font-bold text-gray-800 mb-1.5">{{ $t('task.backend') }}</label>
                 <div class="relative">
@@ -96,10 +97,15 @@
                   >
                     <option value="auto">{{ $t('task.backendAuto') }}</option>
                     
-                    <optgroup :label="$t('task.groupMinerU')">
+                    <optgroup label="MinerU (本地 Local)">
                       <option value="pipeline">{{ $t('task.backendPipeline') }}</option>
-                      <option value="vlm-auto-engine">{{ $t('task.backendVlmAutoEngine') }}</option>
                       <option value="hybrid-auto-engine">{{ $t('task.backendHybridAutoEngine') }}</option>
+                      <option value="vlm-auto-engine">{{ $t('task.backendVlmAutoEngine') }}</option>
+                    </optgroup>
+
+                    <optgroup label="MinerU (远程 Client)">
+                      <option value="hybrid-http-client">{{ $t('task.backendHybridHttpClient') }}</option>
+                      <option value="vlm-http-client">{{ $t('task.backendVlmHttpClient') }}</option>
                     </optgroup>
                     
                     <optgroup :label="$t('task.groupPaddleOCR')">
@@ -127,6 +133,20 @@
                 </p>
               </div>
 
+              <div v-if="isHttpClientBackend" class="col-span-1 md:col-span-2 animate-fade-in">
+                <label class="block text-sm font-medium text-gray-700 mb-1.5">{{ $t('task.serverUrl') }}</label>
+                <div class="relative">
+                  <input 
+                    v-model="config.server_url" 
+                    type="text" 
+                    :placeholder="$t('task.serverUrlPlaceholder')"
+                    class="w-full pl-9 pr-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500" 
+                  />
+                  <Globe class="absolute left-3 top-2.5 w-4 h-4 text-gray-400" />
+                </div>
+                <p class="mt-1 text-xs text-gray-500">{{ $t('task.serverUrlHint') }}</p>
+              </div>
+
               <div v-if="showLanguageOption" class="col-span-1">
                 <label class="block text-sm font-medium text-gray-700 mb-1.5">{{ $t('task.language') }}</label>
                 <select v-model="config.lang" class="w-full px-3 py-2.5 bg-white border border-gray-300 rounded-lg text-sm">
@@ -136,9 +156,18 @@
                 </select>
               </div>
 
-              <div v-if="showLanguageOption" class="col-span-1">
-                <label class="block text-sm font-medium text-gray-700 mb-1.5">{{ $t('task.priorityLabel') }}</label>
-                <input v-model.number="config.priority" type="number" min="0" max="100" class="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm" />
+              <div v-if="isMinerUBackend" class="col-span-1">
+                <label class="block text-sm font-medium text-gray-700 mb-1.5">{{ $t('task.parseMethod') }}</label>
+                <select v-model="config.method" class="w-full px-3 py-2.5 bg-white border border-gray-300 rounded-lg text-sm">
+                   <option value="auto">{{ $t('task.methodAuto') }}</option>
+                   <option value="ocr">{{ $t('task.methodOcr') }}</option>
+                   <option value="txt">{{ $t('task.methodTxt') }}</option>
+                </select>
+              </div>
+              
+              <div v-else-if="showLanguageOption" class="col-span-1">
+                 <label class="block text-sm font-medium text-gray-700 mb-1.5">{{ $t('task.priorityLabel') }}</label>
+                 <input v-model.number="config.priority" type="number" min="0" max="100" class="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm" />
               </div>
             </div>
 
@@ -163,14 +192,11 @@
                   </label>
                   <p class="text-xs text-gray-500 pl-6">{{ formulaDescription }}</p>
                 </div>
-
-                <div v-if="config.backend !== 'vlm-auto-engine'" class="border border-gray-200 rounded-lg p-3 hover:bg-gray-50 transition-colors md:col-span-2" :class="{'bg-orange-50 border-orange-200': config.force_ocr}">
-                  <label class="flex items-center cursor-pointer mb-1">
-                    <input v-model="config.force_ocr" type="checkbox" class="w-4 h-4 text-orange-500 rounded border-gray-300 focus:ring-orange-500" />
-                    <span class="ml-2 text-sm font-medium text-gray-900">{{ $t('task.forceOCR') }} <span v-if="config.force_ocr" class="text-orange-600 text-xs ml-2">{{ $t('task.forceOCRStatus') }}</span></span>
-                  </label>
-                  <p class="text-xs text-gray-500 pl-6">{{ $t('task.forceOCRHint') }}</p>
-                </div>
+              </div>
+              
+              <div v-if="config.method !== 'auto'" class="mt-2 text-xs text-orange-600 bg-orange-50 p-2 rounded border border-orange-100 flex items-start">
+                 <AlertCircle class="w-3.5 h-3.5 mr-1.5 mt-0.5 flex-shrink-0" />
+                 <span>{{ $t('task.methodHint') }}</span>
               </div>
             </div>
 
@@ -243,15 +269,35 @@
 
                 <div v-if="isMinerUBackend">
                   <div class="pt-2 border-t border-dashed border-gray-200 mt-2">
-                    <label class="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">{{ $t('task.debugOutput') }}</label>
-                    <div class="flex space-x-6">
-                       <label class="flex items-center cursor-pointer text-xs text-gray-500 hover:text-gray-700">
-                          <input v-model="config.draw_layout" type="checkbox" class="mr-1.5 rounded border-gray-300" />
-                          {{ $t('task.generateLayoutPDF') }}
+                    <label class="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">{{ $t('task.outputSettings') }}</label>
+                    <div class="grid grid-cols-2 gap-3 bg-white p-3 rounded border border-gray-200">
+                       <label class="flex items-center cursor-pointer text-xs text-gray-600 hover:text-gray-900">
+                          <input v-model="config.draw_layout_bbox" type="checkbox" class="mr-2 rounded border-gray-300" />
+                          {{ $t('task.drawLayout') }}
                        </label>
-                       <label class="flex items-center cursor-pointer text-xs text-gray-500 hover:text-gray-700">
-                          <input v-model="config.draw_span" type="checkbox" class="mr-1.5 rounded border-gray-300" />
-                          {{ $t('task.generateSpanPDF') }}
+                       <label class="flex items-center cursor-pointer text-xs text-gray-600 hover:text-gray-900">
+                          <input v-model="config.draw_span_bbox" type="checkbox" class="mr-2 rounded border-gray-300" />
+                          {{ $t('task.drawSpan') }}
+                       </label>
+                       <label class="flex items-center cursor-pointer text-xs text-gray-600 hover:text-gray-900">
+                          <input v-model="config.dump_markdown" type="checkbox" class="mr-2 rounded border-gray-300" />
+                          {{ $t('task.dumpMarkdown') }}
+                       </label>
+                       <label class="flex items-center cursor-pointer text-xs text-gray-600 hover:text-gray-900">
+                          <input v-model="config.dump_middle_json" type="checkbox" class="mr-2 rounded border-gray-300" />
+                          {{ $t('task.dumpMiddleJson') }}
+                       </label>
+                       <label class="flex items-center cursor-pointer text-xs text-gray-600 hover:text-gray-900">
+                          <input v-model="config.dump_model_output" type="checkbox" class="mr-2 rounded border-gray-300" />
+                          {{ $t('task.dumpModelOutput') }}
+                       </label>
+                       <label class="flex items-center cursor-pointer text-xs text-gray-600 hover:text-gray-900">
+                          <input v-model="config.dump_content_list" type="checkbox" class="mr-2 rounded border-gray-300" />
+                          {{ $t('task.dumpContentList') }}
+                       </label>
+                       <label class="flex items-center cursor-pointer text-xs text-gray-600 hover:text-gray-900">
+                          <input v-model="config.dump_orig_pdf" type="checkbox" class="mr-2 rounded border-gray-300" />
+                          {{ $t('task.dumpOrigPdf') }}
                        </label>
                     </div>
                   </div>
@@ -325,7 +371,7 @@ import FileUploader from '@/components/FileUploader.vue'
 import {
   Upload, Loader, AlertCircle, X, FileText, CheckCircle, XCircle,
   Settings, ChevronDown, ChevronUp, Info, RotateCcw, ArrowRight,
-  ScanText, Send, Sliders
+  ScanText, Send, Sliders, Globe
 } from 'lucide-vue-next'
 import type { Backend, Language, ParseMethod } from '@/api/types'
 
@@ -343,35 +389,47 @@ const currentPreset = ref('default')
 interface SubmitProgress { fileName: string; success: boolean; error: boolean; taskId?: string; errorMsg?: string }
 const submitProgress = ref<SubmitProgress[]>([])
 
-// 预设配置 (使用 computed 以响应语言变化)
+// 预设配置
 const presets = computed(() => [
-  { id: 'default', name: t('task.presetGeneral'), desc: t('task.presetGeneralDesc'), icon: '📄', config: { backend: 'pipeline', force_ocr: false, formula_enable: true, table_enable: true } },
-  { id: 'academic', name: t('task.presetAcademic'), desc: t('task.presetAcademicDesc'), icon: '🎓', config: { backend: 'hybrid-auto-engine', force_ocr: false, formula_enable: true, table_enable: true } },
-  { id: 'scanned', name: t('task.presetScanned'), desc: t('task.presetScannedDesc'), icon: '🖨️', config: { backend: 'hybrid-auto-engine', force_ocr: true, formula_enable: false, table_enable: true } },
-  { id: 'complex', name: t('task.presetComplex'), desc: t('task.presetComplexDesc'), icon: '📊', config: { backend: 'vlm-auto-engine', force_ocr: false, formula_enable: true, table_enable: true } },
+  { id: 'default', name: t('task.presetGeneral'), desc: t('task.presetGeneralDesc'), icon: '📄', config: { backend: 'pipeline', method: 'auto', formula_enable: true, table_enable: true } },
+  { id: 'academic', name: t('task.presetAcademic'), desc: t('task.presetAcademicDesc'), icon: '🎓', config: { backend: 'hybrid-auto-engine', method: 'auto', formula_enable: true, table_enable: true } },
+  { id: 'scanned', name: t('task.presetScanned'), desc: t('task.presetScannedDesc'), icon: '🖨️', config: { backend: 'hybrid-auto-engine', method: 'ocr', formula_enable: false, table_enable: true } },
+  { id: 'complex', name: t('task.presetComplex'), desc: t('task.presetComplexDesc'), icon: '📊', config: { backend: 'vlm-auto-engine', method: 'auto', formula_enable: true, table_enable: true } },
 ])
 
 const defaultConfig = {
   backend: 'auto' as Backend,
   lang: 'auto' as Language,
   method: 'auto' as ParseMethod,
-  force_ocr: false,
+  // force_ocr 已废弃，使用 method='ocr'
   formula_enable: true,
   table_enable: true,
   priority: 0,
   start_page: undefined as number | undefined,
   end_page: undefined as number | undefined,
-  draw_layout: false,
-  draw_span: false,
+  
+  // 预处理
   convert_office_to_pdf: false,
-  keep_audio: false,
-  enable_keyframe_ocr: false,
-  ocr_backend: 'paddleocr-vl',
-  keep_keyframes: false,
-  enable_speaker_diarization: false,
   remove_watermark: false,
   watermark_conf_threshold: 0.35,
   watermark_dilation: 10,
+  
+  // 音视频
+  keep_audio: false,
+  enable_keyframe_ocr: false,
+  enable_speaker_diarization: false,
+  
+  // 远程服务
+  server_url: '',
+
+  // Mineru 调试输出 (do_parse options)
+  draw_layout_bbox: true, // f_draw_layout_bbox
+  draw_span_bbox: true,   // f_draw_span_bbox
+  dump_markdown: true,    // f_dump_md
+  dump_middle_json: true, // f_dump_middle_json
+  dump_model_output: true,// f_dump_model_output
+  dump_content_list: true,// f_dump_content_list
+  dump_orig_pdf: true     // f_dump_orig_pdf
 }
 
 const config = reactive({ ...defaultConfig })
@@ -380,12 +438,15 @@ const config = reactive({ ...defaultConfig })
 function applyPreset(preset: any) {
   currentPreset.value = preset.id
   Object.assign(config, preset.config)
-  // 如果是扫描件，建议去水印
+  // 针对扫描件预设的特殊处理
   if (preset.id === 'scanned') config.remove_watermark = true
 }
 
-// 计算属性
-const isMinerUBackend = computed(() => ['pipeline', 'vlm-auto-engine', 'hybrid-auto-engine'].includes(config.backend))
+// 计算属性：后端分类
+const mineruBackends = ['pipeline', 'vlm-auto-engine', 'hybrid-auto-engine', 'vlm-http-client', 'hybrid-http-client']
+const isMinerUBackend = computed(() => mineruBackends.includes(config.backend))
+const isHttpClientBackend = computed(() => ['vlm-http-client', 'hybrid-http-client'].includes(config.backend))
+
 const showLanguageOption = computed(() => isMinerUBackend.value || ['paddleocr-vl', 'paddleocr-vl-vllm', 'sensevoice', 'auto'].includes(config.backend))
 
 // 动态 Hint
@@ -395,6 +456,8 @@ const currentBackendHint = computed(() => {
     'pipeline': t('task.backendPipelineHint'),
     'vlm-auto-engine': t('task.backendVLMAutoHint'),
     'hybrid-auto-engine': t('task.backendHybridAutoHint'),
+    'vlm-http-client': t('task.backendVlmHttpClientHint'),
+    'hybrid-http-client': t('task.backendHybridHttpClientHint'),
     'paddleocr-vl': t('task.backendPaddleOcrVl09bHint'), 
     'paddleocr-vl-vllm': t('task.backendPaddleOCRVLLMHint'),
     'sensevoice': t('task.backendSenseVoiceHint'),
@@ -405,10 +468,10 @@ const currentBackendHint = computed(() => {
   return map[config.backend] || ''
 })
 
-const formulaLabel = computed(() => config.backend === 'vlm-auto-engine' ? t('task.enableFormulaInterline') : (config.backend === 'hybrid-auto-engine' ? t('task.enableFormulaInline') : t('task.enableFormulaRecognition')))
-const formulaDescription = computed(() => config.backend === 'vlm-auto-engine' ? t('task.formulaDisabledHintInterline') : (config.backend === 'hybrid-auto-engine' ? t('task.formulaDisabledHintInline') : t('task.formulaDisabledHintNormal')))
+const formulaLabel = computed(() => config.backend.includes('vlm') ? t('task.enableFormulaInterline') : (config.backend.includes('hybrid') ? t('task.enableFormulaInline') : t('task.enableFormulaRecognition')))
+const formulaDescription = computed(() => config.backend.includes('vlm') ? t('task.formulaDisabledHintInterline') : (config.backend.includes('hybrid') ? t('task.formulaDisabledHintInline') : t('task.formulaDisabledHintNormal')))
 
-// 动态语言列表
+// 完整语言列表
 const availableLanguages = computed(() => {
   const commonLangs = [
     { value: 'auto', label: t('task.langAuto') },
@@ -417,15 +480,15 @@ const availableLanguages = computed(() => {
   ]
   
   // VLM 仅支持中英
-  if (config.backend === 'vlm-auto-engine') {
+  if (config.backend.includes('vlm')) {
     return [
        { value: 'ch', label: t('task.langChinese') },
        { value: 'en', label: t('task.langEnglish') }
     ]
   }
   
-  // Pipeline / Hybrid 支持更多语言
-  if (['pipeline', 'hybrid-auto-engine'].includes(config.backend)) {
+  // Pipeline / Hybrid 支持 Mineru 的全套语言
+  if (isMinerUBackend.value) {
     return [
       ...commonLangs,
       { value: 'korean', label: t('task.langKorean') },
@@ -433,12 +496,19 @@ const availableLanguages = computed(() => {
       { value: 'chinese_cht', label: t('task.langTraditional') },
       { value: 'ch_server', label: t('task.langChineseServer') },
       { value: 'ch_lite', label: t('task.langChineseLite') },
-      { value: 'th', label: 'Thai (泰语)' },
-      { value: 'vi', label: 'Vietnamese (越南语)' },
-      { value: 'ru', label: 'Russian (俄语)' },
-      { value: 'ar', label: 'Arabic (阿拉伯语)' },
-      { value: 'fr', label: 'French (法语)' },
-      { value: 'de', label: 'German (德语)' }
+      { value: 'th', label: t('task.langThai') },
+      { value: 'vi', label: t('task.langVietnamese') },
+      { value: 'ru', label: t('task.langRussian') },
+      { value: 'ar', label: t('task.langArabic') },
+      { value: 'fr', label: t('task.langFrench') },
+      { value: 'de', label: t('task.langGerman') },
+      { value: 'ta', label: t('task.langTamil') },
+      { value: 'te', label: t('task.langTelugu') },
+      { value: 'ka', label: t('task.langKannada') },
+      { value: 'el', label: t('task.langGreek') },
+      { value: 'latin', label: t('task.langLatin') },
+      { value: 'cyrillic', label: t('task.langCyrillic') },
+      { value: 'devanagari', label: t('task.langDevanagari') }
     ]
   }
 
@@ -452,7 +522,7 @@ function onBackendChange() {
   currentPreset.value = 'custom'; 
   
   // 如果切换到 VLM，强制重置语言为中文或英文
-  if (config.backend === 'vlm-auto-engine') {
+  if (config.backend.includes('vlm')) {
      if (!['ch', 'en'].includes(config.lang)) {
         config.lang = 'ch' 
      }
@@ -471,7 +541,7 @@ function resetConfig() { Object.assign(config, defaultConfig); localStorage.remo
 function resetForm() {
     files.value = [];
     if (fileUploader.value) {
-        // fileUploader.value.clear(); // 如果 FileUploader 有 clear 方法
+       // logic to clear uploader if exposed
     }
     submitProgress.value = [];
     submitting.value = false;
@@ -490,14 +560,19 @@ async function submitTasks() {
     }
   }
 
+  if (isHttpClientBackend.value && !config.server_url) {
+    errorMessage.value = "请填写远程服务器地址 (Server URL)"
+    return
+  }
+
   submitting.value = true; errorMessage.value = ''
   submitProgress.value = files.value.map(f => ({ fileName: f.name, success: false, error: false }))
 
   for (let i = 0; i < files.value.length; i++) {
     try {
       const submitConfig = { ...config }
-      if (submitConfig.force_ocr) submitConfig.method = 'ocr'
       if (submitConfig.end_page === undefined) delete (submitConfig as any).end_page
+      
       const response = await taskStore.submitTask({ file: files.value[i], ...submitConfig })
       submitProgress.value[i].success = true; submitProgress.value[i].taskId = response.task_id
     } catch (err: any) {
