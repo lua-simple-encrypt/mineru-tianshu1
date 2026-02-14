@@ -86,19 +86,29 @@ def process_markdown_images_legacy(md_content: str, image_dir: Path, result_path
 
     def replace_image_path(match):
         full_match, alt_text, image_path = match.group(0), match.group(1), match.group(2)
-        if image_path.startswith("http"): return full_match
+        if image_path.startswith("http"): 
+            return full_match
         try:
             image_filename = Path(image_path).name
             output_dir_str = str(OUTPUT_DIR).replace("\\", "/")
             result_path_str = result_path.replace("\\", "/")
             if result_path_str.startswith(output_dir_str):
                 relative_path = result_path_str[len(output_dir_str) :].lstrip("/")
-                static_url = f"/api/v1/files/output/{quote(relative_path)}/images/{quote(image_filename)}"
-                return f"![{alt_text}]({static_url})"
-        except: pass
+                # ✅ [修复Bug] 必须加 safe="/"，否则路径里的斜杠会变成 %2F 导致图片 404
+                static_url = f"/api/v1/files/output/{quote(relative_path, safe='/')}/images/{quote(image_filename, safe='/')}"
+                if "![" in full_match:
+                    return f"![{alt_text}]({static_url})"
+                else:
+                    return full_match.replace(image_path, static_url)
+        except Exception as e: 
+            logger.warning(f"Image replacement failed: {e}")
         return full_match
 
-    return re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", replace_image_path, md_content)
+    md_pattern = r"!\[([^\]]*)\]\(([^)]+)\)"
+    html_pattern = r'<img\s+([^>]*\s+)?src="([^"]+)"([^>]*)>'
+    new_content = re.sub(md_pattern, replace_image_path, md_content)
+    new_content = re.sub(html_pattern, replace_image_path, new_content)
+    return new_content
 
 
 @app.get("/", tags=["系统信息"])
@@ -173,6 +183,7 @@ async def get_task_status(
     if not current_user.has_permission(Permission.TASK_VIEW_ALL) and task.get("user_id") != current_user.user_id:
         raise HTTPException(status_code=403, detail="Permission denied")
 
+    # ✅ [确认修复] 前端请求 source_url，这里生成的带 /api/v1/
     source_url = f"/api/v1/files/upload/{quote(Path(task['file_path']).name)}" if task.get("file_path") else None
     response = {
         "success": True, "task_id": task_id, "status": task["status"], "file_name": task["file_name"],
@@ -192,7 +203,9 @@ async def get_task_status(
             # 查找预览PDF
             pdf = next(res_dir.rglob("*_layout.pdf"), next(res_dir.rglob("*.pdf"), None))
             if pdf: 
-                try: response["data"]["pdf_path"] = quote(str(pdf.relative_to(OUTPUT_DIR)).replace("\\", "/"))
+                try: 
+                    # ✅ [修复Bug] 保证路径斜杠不被错误编码
+                    response["data"]["pdf_path"] = quote(str(pdf.relative_to(OUTPUT_DIR)).replace("\\", "/"), safe="/")
                 except: pass
 
             if format in ["markdown", "both"]:
@@ -209,7 +222,23 @@ async def get_task_status(
     return response
 
 
-# ✅ [核心重构] 实现真分页、搜索和筛选，移除了冗余 limit 参数
+@app.delete("/api/v1/tasks/{task_id}", tags=["任务管理"])
+async def cancel_task(task_id: str, current_user: User = Depends(get_current_active_user)):
+    task = db.get_task(task_id)
+    if not task: raise HTTPException(status_code=404, detail="Task not found")
+
+    if not current_user.has_permission(Permission.TASK_DELETE_ALL) and task.get("user_id") != current_user.user_id:
+        raise HTTPException(status_code=403, detail="Permission denied")
+
+    if task["status"] == "pending":
+        db.update_task_status(task_id, "cancelled")
+        file_path = Path(task["file_path"])
+        if file_path.exists(): file_path.unlink()
+        return {"success": True, "message": "Task cancelled successfully"}
+    else:
+        raise HTTPException(status_code=400, detail=f"Cannot cancel task in {task['status']} status")
+
+
 @app.get("/api/v1/queue/tasks", tags=["队列管理"])
 async def list_tasks(
     status: Optional[str] = Query(None, description="筛选状态"),
@@ -244,6 +273,25 @@ async def list_tasks(
     return {"success": True, "total": total, "page": page, "page_size": page_size, "tasks": tasks, "can_view_all": can_view_all}
 
 
+# ✅ [修复Bug] 恢复您丢失的管理接口
+@app.get("/api/v1/queue/stats", tags=["队列管理"])
+async def get_queue_stats(current_user: User = Depends(require_permission(Permission.QUEUE_VIEW))):
+    stats = db.get_queue_stats()
+    return {"success": True, "stats": stats, "total": sum(stats.values()), "timestamp": datetime.now().isoformat()}
+
+
+@app.post("/api/v1/admin/cleanup", tags=["系统管理"])
+async def cleanup_old_tasks(days: int = Query(7), current_user: User = Depends(require_permission(Permission.QUEUE_MANAGE))):
+    deleted_count = db.cleanup_old_task_records(days)
+    return {"success": True, "deleted_count": deleted_count}
+
+
+@app.post("/api/v1/admin/reset-stale", tags=["系统管理"])
+async def reset_stale_tasks(timeout_minutes: int = Query(60), current_user: User = Depends(require_permission(Permission.QUEUE_MANAGE))):
+    reset_count = db.reset_stale_tasks(timeout_minutes)
+    return {"success": True, "reset_count": reset_count}
+
+
 @app.get("/api/v1/engines", tags=["系统信息"])
 async def list_engines():
     import importlib.util
@@ -251,7 +299,7 @@ async def list_engines():
     if importlib.util.find_spec("paddleocr_vl"):
         ocr.append({"name": "paddleocr_vl", "display_name": "PaddleOCR-VL v1.5 (0.9B)"})
     if importlib.util.find_spec("paddleocr_vl_vllm"):
-        ocr.append({"name": "paddleocr-vl-vllm", "display_name": "PaddleOCR-VL v1.5 (0.9B) (vLLM)"}) # ✅ 严谨标注 0.9B
+        ocr.append({"name": "paddleocr-vl-vllm", "display_name": "PaddleOCR-VL v1.5 (0.9B) (vLLM)"}) 
     
     return {
         "success": True,
@@ -276,20 +324,31 @@ async def health_check():
         return JSONResponse(status_code=503, content={"status": "unhealthy", "error": str(e)})
 
 
-# ✅ [优化] 合并文件服务逻辑，支持 URL 解码与 MIME 识别预览
-@app.get("/v1/files/{file_type}/{file_path:path}", tags=["文件服务"])
+# ✅ [核心修复] 将文件路由前缀补齐 /api ，解决 404 错误
+# ✅ [核心修复] 使用 Pathlib 的 is_relative_to 修复安全漏洞
+@app.get("/api/v1/files/{file_type}/{file_path:path}", tags=["文件服务"])
 async def serve_file(file_type: str, file_path: str):
-    root = OUTPUT_DIR if file_type == "output" else UPLOAD_DIR
+    if file_type not in ["output", "upload"]:
+        raise HTTPException(status_code=400, detail="Invalid file type")
+
+    root_dir = OUTPUT_DIR.resolve() if file_type == "output" else UPLOAD_DIR.resolve()
+    
     try:
-        full_path = (root / unquote(file_path)).resolve()
-        if not str(full_path).startswith(str(root.resolve())) or not full_path.is_file():
+        decoded_path = unquote(file_path)
+        full_path = (root_dir / decoded_path).resolve()
+        
+        # 安全防御：防止目录穿越攻击
+        if not full_path.is_relative_to(root_dir) or not full_path.is_file():
             raise HTTPException(status_code=404, detail="File not found")
         
         mtype, _ = mimetypes.guess_type(full_path)
         return FileResponse(path=str(full_path), media_type=mtype or "application/octet-stream", filename=full_path.name)
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        if isinstance(e, HTTPException): raise e
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error serving {file_type} file: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
 
 
 if __name__ == "__main__":
