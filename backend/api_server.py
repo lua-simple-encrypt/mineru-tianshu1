@@ -110,14 +110,6 @@ def process_markdown_images_legacy(md_content: str, image_dir: Path, result_path
 
     Worker 已自动上传图片到 RustFS 并替换 URL，此函数仅用于向后兼容。
     如果检测到图片路径不是 URL，则转换为本地静态文件服务 URL。
-
-    Args:
-        md_content: Markdown 内容
-        image_dir: 图片所在目录
-        result_path: 任务结果路径
-
-    Returns:
-        处理后的 Markdown 内容
     """
     # 检查是否已经包含 RustFS URL
     if "http://" in md_content or "https://" in md_content:
@@ -201,42 +193,58 @@ async def submit_task(
     file: UploadFile = File(..., description="文件: PDF/图片/Office/HTML/音频/视频等多种格式"),
     backend: str = Form(
         "auto",
-        description="处理后端: auto (自动) | pipeline (传统管道) | vlm-auto-engine (VLM大模型) | hybrid-auto-engine (混合高精度) | paddleocr-vl | sensevoice | video",
+        description="处理后端: pipeline, hybrid-auto-engine, vlm-auto-engine, hybrid-http-client, vlm-http-client, paddleocr-vl, etc.",
     ),
-    lang: str = Form("auto", description="语言: auto/ch/en/korean/japan等"),
+    lang: str = Form("auto", description="语言: ch/en/auto..."),
     method: str = Form("auto", description="解析方法: auto/txt/ocr"),
     formula_enable: bool = Form(True, description="是否启用公式识别"),
     table_enable: bool = Form(True, description="是否启用表格识别"),
+    priority: int = Form(0, description="优先级，数字越大越优先"),
     
     # === 新增参数 ===
     start_page: Optional[int] = Form(None, description="起始页码（从0开始）"),
     end_page: Optional[int] = Form(None, description="结束页码"),
-    force_ocr: bool = Form(False, description="是否强制使用OCR"),
-    # ==============
-
-    # 新增 MinerU 高级选项
-    draw_layout: bool = Form(True, description="是否绘制布局边框（PDF调试）"),
-    draw_span: bool = Form(True, description="是否绘制文本Span边框（PDF调试）"),
+    # force_ocr 保留兼容，但建议使用 method='ocr'
+    force_ocr: bool = Form(False, description="[兼容旧版] 是否强制使用OCR"),
     
-    priority: int = Form(0, description="优先级，数字越大越优先"),
+    # 远程服务参数
+    server_url: Optional[str] = Form(None, description="远程服务器地址 (仅 Client 模式需要)"),
+
+    # MinerU 详细调试/输出选项 (对应前端 Advanced Settings)
+    draw_layout_bbox: bool = Form(True, description="绘制布局边框 (_layout.pdf)"),
+    draw_span_bbox: bool = Form(True, description="绘制文本边框 (_span.pdf)"),
+    dump_markdown: bool = Form(True, description="输出 Markdown"),
+    dump_middle_json: bool = Form(True, description="输出中间 JSON"),
+    dump_model_output: bool = Form(True, description="输出模型原始数据"),
+    dump_content_list: bool = Form(True, description="输出内容列表"),
+    dump_orig_pdf: bool = Form(True, description="保存原始/截取 PDF"),
+    
+    # 旧版参数兼容 (Worker 会做映射)
+    draw_layout: bool = Form(True, description="[兼容旧版] 是否绘制布局边框"),
+    draw_span: bool = Form(True, description="[兼容旧版] 是否绘制文本Span边框"),
+    
     # 视频处理专用参数
     keep_audio: bool = Form(False, description="视频处理时是否保留提取的音频文件"),
     enable_keyframe_ocr: bool = Form(False, description="是否启用视频关键帧OCR识别（实验性功能）"),
     ocr_backend: str = Form("paddleocr-vl", description="关键帧OCR引擎: paddleocr-vl"),
     keep_keyframes: bool = Form(False, description="是否保留提取的关键帧图像"),
+    
     # 音频处理专用参数
     enable_speaker_diarization: bool = Form(
         False, description="是否启用说话人分离（音频多说话人识别，需要额外下载 Paraformer 模型）"
     ),
+    
     # 水印去除专用参数
     remove_watermark: bool = Form(False, description="是否启用水印去除（支持 PDF/图片）"),
     watermark_conf_threshold: float = Form(0.35, description="水印检测置信度阈值（0.0-1.0，推荐 0.35）"),
     watermark_dilation: int = Form(10, description="水印掩码膨胀大小（像素，推荐 10）"),
+    
     # Office 文件转 PDF 参数
     convert_office_to_pdf: bool = Form(
         False,
         description="是否将 Office 文件转换为 PDF 后再处理（图片提取更完整，但速度较慢）"
     ),
+    
     # 认证依赖
     current_user: User = Depends(require_permission(Permission.TASK_SUBMIT)),
 ):
@@ -268,25 +276,41 @@ async def submit_task(
             "formula_enable": formula_enable,
             "table_enable": table_enable,
             
-            # === 新增参数传入 options ===
+            # 分页与模式
             "start_page": start_page,
             "end_page": end_page,
             "force_ocr": force_ocr,
-            # ==========================
             
-            "draw_layout": draw_layout,  # 传递给 Worker
-            "draw_span": draw_span,      # 传递给 Worker
+            # 远程服务
+            "server_url": server_url,
+
+            # MinerU 调试/输出选项 (标准化名称)
+            "draw_layout_bbox": draw_layout_bbox,
+            "draw_span_bbox": draw_span_bbox,
+            "dump_markdown": dump_markdown,
+            "dump_middle_json": dump_middle_json,
+            "dump_model_output": dump_model_output,
+            "dump_content_list": dump_content_list,
+            "dump_orig_pdf": dump_orig_pdf,
+            
+            # 兼容旧参数 (如果 Worker 还在用旧名称)
+            "draw_layout": draw_layout,
+            "draw_span": draw_span,
+            
             # 视频处理参数
             "keep_audio": keep_audio,
             "enable_keyframe_ocr": enable_keyframe_ocr,
             "ocr_backend": ocr_backend,
             "keep_keyframes": keep_keyframes,
+            
             # 音频处理参数
             "enable_speaker_diarization": enable_speaker_diarization,
+            
             # 水印去除参数
             "remove_watermark": remove_watermark,
             "watermark_conf_threshold": watermark_conf_threshold,
             "watermark_dilation": watermark_dilation,
+            
             # Office 转 PDF 参数
             "convert_office_to_pdf": convert_office_to_pdf,
         }
@@ -425,6 +449,7 @@ async def get_task_status(
             logger.info("✅ Result directory exists")
             # 递归查找 Markdown 文件（MinerU 输出结构：task_id/filename/auto/*.md）
             md_files = list(result_dir.rglob("*.md"))
+            
             # 递归查找 JSON 文件
             # MinerU 输出格式: {filename}_content_list.json (主要的结构化内容)
             # 也支持其他引擎的: content.json, result.json
@@ -443,6 +468,34 @@ async def get_task_status(
 
                     # 标记 JSON 是否可用
                     response["data"]["json_available"] = len(json_files) > 0
+                    
+                    # 查找 PDF 预览文件 (Layout/Span debug pdf 或 原始文件)
+                    # MinerU 默认生成 {filename}_layout.pdf
+                    pdf_files = list(result_dir.rglob("*.pdf"))
+                    preview_pdf = None
+                    # 优先级: _layout.pdf > _span.pdf > 任意 pdf (排除 page_*)
+                    for pdf in pdf_files:
+                        if "_layout.pdf" in pdf.name:
+                            preview_pdf = pdf
+                            break
+                    if not preview_pdf:
+                         for pdf in pdf_files:
+                             if "_span.pdf" in pdf.name:
+                                 preview_pdf = pdf
+                                 break
+                    # 如果找到了预览 PDF，生成其 URL
+                    if preview_pdf:
+                        try:
+                             # 计算相对于 output 目录的路径
+                             # 假设 OUTPUT_DIR=/app/data/output, pdf=/app/data/output/taskid/...
+                             rel_path = preview_pdf.relative_to(OUTPUT_DIR)
+                             # 编码路径
+                             encoded_path = quote(str(rel_path).replace("\\", "/"))
+                             response["data"]["pdf_path"] = encoded_path
+                             logger.info(f"📄 Found preview PDF: {preview_pdf.name}")
+                        except ValueError:
+                             logger.warning(f"Preview PDF {preview_pdf} is not inside OUTPUT_DIR {OUTPUT_DIR}")
+
 
                     # 根据 format 参数决定返回内容
                     if format in ["markdown", "both"]:
