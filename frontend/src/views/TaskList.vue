@@ -3,7 +3,7 @@
     <div class="mb-6 flex flex-col md:flex-row md:items-end justify-between gap-4">
       <div>
         <h1 class="text-2xl font-bold text-gray-900">{{ $t('task.taskList') }}</h1>
-        <p class="mt-1 text-sm text-gray-500">{{ $t('task.taskList') }}</p>
+        <p class="mt-1 text-sm text-gray-500">{{ $t('task.taskListDesc') || $t('task.taskList') }}</p>
       </div>
       
       <div class="flex flex-wrap items-center gap-3">
@@ -39,7 +39,7 @@
             <select
               v-model="filters.status"
               @change="applyFilters"
-              class="w-full pl-3 pr-8 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm appearance-none"
+              class="w-full pl-3 pr-8 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm appearance-none outline-none"
             >
               <option value="">{{ $t('task.allStatus') }}</option>
               <option value="pending">{{ $t('status.pending') }}</option>
@@ -58,25 +58,21 @@
             <select
               v-model="filters.backend"
               @change="applyFilters"
-              class="w-full pl-3 pr-8 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm appearance-none"
+              class="w-full pl-3 pr-8 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm appearance-none outline-none"
             >
               <option value="">{{ $t('task.allStatus') }}</option>
-              <optgroup :label="$t('task.groupMinerU')">
+              <optgroup label="MinerU">
                 <option value="pipeline">Pipeline (Standard)</option>
                 <option value="vlm-auto-engine">VLM Auto (Visual)</option>
                 <option value="hybrid-auto-engine">Hybrid (High Prec.)</option>
               </optgroup>
-              <optgroup :label="$t('task.groupPaddleOCR')">
-                <option value="paddleocr-vl">PaddleOCR-VL v1.5 (0.9B)</option>
+              <optgroup label="PaddleOCR">
+                <option value="paddleocr_vl">PaddleOCR-VL v1.5 (0.9B)</option>
                 <option value="paddleocr-vl-vllm">PaddleOCR-VL v1.5 (0.9B) (vLLM)</option>
               </optgroup>
-              <optgroup :label="$t('task.groupAudioVideo')">
+              <optgroup label="Media">
                 <option value="sensevoice">SenseVoice (Audio)</option>
                 <option value="video">Video Processing</option>
-              </optgroup>
-              <optgroup :label="$t('task.groupProfessional')">
-                <option value="fasta">FASTA</option>
-                <option value="genbank">GenBank</option>
               </optgroup>
             </select>
             <Server class="absolute right-2.5 top-2.5 w-4 h-4 text-gray-400 pointer-events-none" />
@@ -88,10 +84,10 @@
           <div class="relative">
             <input
               v-model="filters.search"
-              @change="applyFilters" 
+              @input="applyFilters" 
               type="text"
               :placeholder="$t('common.search') + ' (' + $t('task.fileName') + ' / ID)'"
-              class="w-full pl-9 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm"
+              class="w-full pl-9 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm outline-none"
             >
             <Search class="absolute left-3 top-2.5 w-4 h-4 text-gray-400 pointer-events-none" />
           </div>
@@ -99,7 +95,7 @@
       </div>
     </div>
 
-    <div class="card shadow-sm border-gray-100 overflow-hidden">
+    <div class="card shadow-sm border-gray-100 overflow-hidden min-h-[400px]">
       
       <div v-if="selectedTasks.length > 0" class="bg-blue-50 px-6 py-2 border-b border-blue-100 flex items-center justify-between transition-all animate-fade-in">
         <div class="flex items-center text-blue-800 text-sm font-medium">
@@ -123,11 +119,11 @@
         </div>
       </div>
 
-      <div v-if="loading && tasks.length === 0" class="flex flex-col items-center justify-center py-20">
+      <div v-if="loading && tasks.length === 0" class="flex flex-col items-center justify-center py-40">
         <LoadingSpinner size="lg" :text="$t('common.loading')" />
       </div>
 
-      <div v-else-if="tasks.length === 0" class="flex flex-col items-center justify-center py-20 text-gray-500">
+      <div v-else-if="tasks.length === 0" class="flex flex-col items-center justify-center py-40 text-gray-500">
         <div class="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mb-4">
           <FileQuestion class="w-8 h-8 text-gray-400" />
         </div>
@@ -150,21 +146,11 @@
                   class="rounded border-gray-300 text-primary-600 focus:ring-primary-500 w-4 h-4 cursor-pointer"
                 />
               </th>
-              <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                {{ $t('task.fileName') }}
-              </th>
-              <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                {{ $t('task.status') }}
-              </th>
-              <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                {{ $t('task.backend') }}
-              </th>
-              <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                {{ $t('task.basicInfo') }}
-              </th>
-              <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                {{ $t('task.actions') }}
-              </th>
+              <th scope="col" class="table-th">{{ $t('task.fileName') }}</th>
+              <th scope="col" class="table-th">{{ $t('task.status') }}</th>
+              <th scope="col" class="table-th">{{ $t('task.backend') }}</th>
+              <th scope="col" class="table-th">{{ $t('task.basicInfo') }}</th>
+              <th scope="col" class="table-th text-right">{{ $t('task.actions') }}</th>
             </tr>
           </thead>
           <tbody class="bg-white divide-y divide-gray-100">
@@ -184,8 +170,8 @@
               </td>
               <td class="px-6 py-4">
                 <div class="flex items-start">
-                  <div class="p-2 bg-gray-100 rounded-lg mr-3 group-hover:bg-white group-hover:shadow-sm transition-all">
-                    <FileText class="w-5 h-5 text-gray-500" />
+                  <div class="p-2 bg-gray-100 rounded-lg mr-3 group-hover:bg-white group-hover:shadow-sm transition-all text-gray-500">
+                    <FileText class="w-5 h-5" />
                   </div>
                   <div class="min-w-0">
                     <div class="text-sm font-medium text-gray-900 truncate max-w-[200px] sm:max-w-[300px]" :title="task.file_name">
@@ -234,7 +220,6 @@
                   >
                     <XCircle class="w-4 h-4" />
                   </button>
-                  <span v-else class="w-7"></span>
                 </div>
               </td>
             </tr>
@@ -250,7 +235,7 @@
           <button
             @click="changePage(currentPage - 1)"
             :disabled="currentPage === 1"
-            class="p-2 bg-white border border-gray-300 rounded-md text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-colors"
+            class="page-btn"
           >
             <ChevronLeft class="w-4 h-4" />
           </button>
@@ -262,7 +247,7 @@
           <button
             @click="changePage(currentPage + 1)"
             :disabled="currentPage === totalPages"
-            class="p-2 bg-white border border-gray-300 rounded-md text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-colors"
+            class="page-btn"
           >
             <ChevronRight class="w-4 h-4" />
           </button>
@@ -297,20 +282,21 @@ import type { TaskStatus, Backend } from '@/api/types'
 const { t } = useI18n()
 const taskStore = useTaskStore()
 
-// 使用 store 中的状态
+// 状态订阅
 const tasks = computed(() => taskStore.tasks)
-const total = computed(() => taskStore.total) // 从 store 获取总数
+const total = computed(() => taskStore.total)
 const loading = ref(false)
-
 const autoRefresh = ref(false)
 let refreshInterval: number | null = null
 
+// 筛选状态
 const filters = ref({
   status: '' as TaskStatus | '',
   backend: '' as Backend | '',
   search: '',
 })
 
+// 分页配置
 const pageSize = 20
 const currentPage = ref(1)
 const totalPages = computed(() => Math.ceil(total.value / pageSize) || 1)
@@ -319,37 +305,26 @@ const totalPages = computed(() => Math.ceil(total.value / pageSize) || 1)
 const selectedTasks = ref<string[]>([])
 const selectAll = ref(false)
 
+/**
+ * 切换全选
+ */
 function toggleSelectAll() {
   if (selectAll.value) {
-    // 仅选中当前页的任务
     selectedTasks.value = tasks.value.map(t => t.task_id)
   } else {
     selectedTasks.value = []
   }
 }
 
+// 监听翻页，清除选择状态
 watch(currentPage, () => {
   selectAll.value = false
-  selectedTasks.value = [] // 换页时清除选中
+  selectedTasks.value = []
 })
 
-// 自动刷新逻辑 (持久化)
-watch(autoRefresh, (newVal) => {
-  localStorage.setItem('task_list_auto_refresh', String(newVal))
-  if (newVal) {
-    refreshTasks(false)
-    if (!refreshInterval) {
-        refreshInterval = window.setInterval(() => refreshTasks(false), 5000)
-    }
-  } else {
-    if (refreshInterval) {
-      clearInterval(refreshInterval)
-      refreshInterval = null
-    }
-  }
-})
-
-// 核心刷新函数 (对接服务端分页)
+/**
+ * 核心：获取任务列表（服务端分页）
+ */
 async function refreshTasks(forceLoading = false) {
   if (forceLoading) loading.value = true
   
@@ -362,16 +337,33 @@ async function refreshTasks(forceLoading = false) {
       search: filters.value.search || undefined
     })
   } finally {
-    if (forceLoading) loading.value = false
+    loading.value = false
   }
 }
 
-// 筛选变更
+/**
+ * 翻页逻辑
+ */
+function changePage(page: number) {
+  if (page >= 1 && page <= totalPages.value) {
+    currentPage.value = page
+    refreshTasks(true)
+    // 翻页后平滑滚动到顶部
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+}
+
+/**
+ * 应用筛选
+ */
 function applyFilters() {
-  currentPage.value = 1
+  currentPage.value = 1 // 筛选变更必须重置到第一页
   refreshTasks(true)
 }
 
+/**
+ * 清除筛选
+ */
 function clearFilters() {
   filters.value.status = ''
   filters.value.backend = ''
@@ -379,22 +371,25 @@ function clearFilters() {
   applyFilters()
 }
 
-// 翻页
-function changePage(page: number) {
-    if (page >= 1 && page <= totalPages.value) {
-        currentPage.value = page
-        refreshTasks(true)
+/**
+ * 自动刷新逻辑
+ */
+watch(autoRefresh, (newVal) => {
+  localStorage.setItem('task_list_auto_refresh', String(newVal))
+  if (newVal) {
+    refreshTasks(false)
+    refreshInterval = window.setInterval(() => refreshTasks(false), 5000)
+  } else {
+    if (refreshInterval) {
+      clearInterval(refreshInterval)
+      refreshInterval = null
     }
-}
+  }
+})
 
-function copyToClipboard(text: string) {
-  navigator.clipboard.writeText(text)
-}
-
-// 恢复自动刷新状态
+// 生命周期挂载
 onMounted(async () => {
   await refreshTasks(true)
-  
   const savedAutoRefresh = localStorage.getItem('task_list_auto_refresh')
   if (savedAutoRefresh === 'true') {
     autoRefresh.value = true
@@ -404,6 +399,12 @@ onMounted(async () => {
 onUnmounted(() => {
   if (refreshInterval) clearInterval(refreshInterval)
 })
+
+// 工具函数
+function copyToClipboard(text: string) {
+  navigator.clipboard.writeText(text)
+  // 此处可添加一个简单的 Toast 提示
+}
 
 // 取消任务逻辑
 const showCancelDialog = ref(false)
@@ -417,20 +418,18 @@ async function cancelTask(taskId: string) {
 }
 
 async function batchCancel() {
-  // 注意：这里只能批量取消当前页选中的 pending 任务
-  // 实际上用户只能选中当前页的任务，所以逻辑是闭环的
-  const pendingTasks = selectedTasks.value.filter(id => {
+  const pendingIds = selectedTasks.value.filter(id => {
     const task = tasks.value.find(t => t.task_id === id)
     return task?.status === 'pending'
   })
 
-  if (pendingTasks.length === 0) {
+  if (pendingIds.length === 0) {
     alert(t('task.noPendingTasksToCancel'))
     return
   }
 
-  taskToCancel.value = pendingTasks
-  cancelDialogMessage.value = t('task.confirmBatchCancel', { count: pendingTasks.length })
+  taskToCancel.value = pendingIds
+  cancelDialogMessage.value = t('task.confirmBatchCancel', { count: pendingIds.length })
   showCancelDialog.value = true
 }
 
@@ -440,7 +439,7 @@ async function confirmCancel() {
     try {
       await taskStore.cancelTask(id)
     } catch (err) {
-      console.error(err)
+      console.error('Cancel task error:', err)
     }
   }
   selectedTasks.value = []
@@ -451,6 +450,8 @@ async function confirmCancel() {
 
 <style scoped>
 .btn-sm { @apply px-3 py-1.5 text-sm; }
+.table-th { @apply px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider; }
+.page-btn { @apply p-2 bg-white border border-gray-300 rounded-md text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-colors; }
 .animate-fade-in { animation: fadeIn 0.4s ease-out; }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 .custom-scrollbar::-webkit-scrollbar { height: 6px; width: 6px; }
