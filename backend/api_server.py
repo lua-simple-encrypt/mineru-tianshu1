@@ -23,6 +23,7 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query, Depen
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from loguru import logger
+from starlette.types import ASGIApp, Receive, Scope, Send  # ✅ 新增：用于底层中间件
 
 # 导入认证模块
 from auth import (
@@ -50,6 +51,29 @@ app = FastAPI(
     version="2.0.0",
     # 不设置 servers，让 FastAPI 自动根据请求的 Host 生成
 )
+
+# ============================================================================
+# ✅ 终极修复：ASGI 路径重写中间件
+# 彻底解决 Nginx proxy_pass 剥离 /api/ 导致所有后端接口(特别是 auth)报 404 的问题
+# ============================================================================
+class NginxPathRewriteMiddleware:
+    """拦截底层 ASGI 请求，给被 Nginx 剥离的路径补全前缀"""
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] in ("http", "websocket"):
+            path = scope.get("path", "")
+            # 如果收到 Nginx 发来的 /v1/...，自动补全为 /api/v1/...
+            if path.startswith("/v1/"):
+                scope["path"] = f"/api{path}"
+                # 某些底层组件匹配强依赖 raw_path，也一并修改
+                if "raw_path" in scope:
+                    scope["raw_path"] = b"/api" + scope["raw_path"]
+        await self.app(scope, receive, send)
+
+# 必须最先添加此中间件！
+app.add_middleware(NginxPathRewriteMiddleware)
 
 # 添加 CORS 中间件
 app.add_middleware(
@@ -201,11 +225,8 @@ async def root():
 
 
 # ============================================================================
-# 创建 API Router (核心修复：解决 Nginx 路径剥离问题)
+# 创建 API Router
 # ============================================================================
-# 所有的业务接口都挂载到 router 上，然后注册两次：
-# 1. /api/v1 (完整路径)
-# 2. /v1 (Nginx 剥离后路径)
 router = APIRouter()
 
 
@@ -823,11 +844,10 @@ async def serve_upload_file(file_path: str):
 
 
 # ============================================================================
-# 注册双重路由
+# 注册底层路由
 # ============================================================================
+# 因为有了 ASGI 中间件自动补全 /api 前缀，这里只需挂载一份标准的 /api/v1 即可完美工作！
 app.include_router(router, prefix="/api/v1")
-app.include_router(router, prefix="/v1")
-
 
 logger.info(f"📁 File service mounted: /api/v1/files/output -> {OUTPUT_DIR}")
 logger.info(f"📁 File service mounted: /api/v1/files/upload -> {UPLOAD_DIR}")
