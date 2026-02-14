@@ -130,32 +130,34 @@ class MinerUPipelineEngine:
         file_ext = Path(file_path).suffix.lower()
 
         # 1. 确定 Backend (处理模式) 和 Server URL
-        # options["parse_mode"] 来自前端 API: pipeline | vlm-auto-engine | hybrid-auto-engine
+        # options["parse_mode"] 来自前端 API: pipeline | vlm-auto-engine | hybrid-auto-engine | vlm-http-client | hybrid-http-client
         user_backend = options.get("parse_mode", "pipeline")
         if user_backend == "auto":
             user_backend = "pipeline"
 
         backend = user_backend
-        server_url = None
+        server_url = options.get("server_url")  # 优先使用 options 中的 server_url (Client 模式)
 
-        # 智能切换：如果配置了 vlm_api_base，则使用 http-client 模式以调用 vLLM 加速
-        if self.vlm_api_base:
+        # 智能切换：如果配置了本地 vlm_api_base 且没指定 server_url，尝试自动使用本地服务加速
+        if not server_url and self.vlm_api_base:
             if user_backend == "vlm-auto-engine":
                 backend = "vlm-http-client"
-                server_url = self.vlm_api_base
-                logger.info(f"🔄 [Accelerate] Switching backend to {backend} using vLLM")
+                # 去掉 /v1 后缀，因为 MinerU 客户端通常只需要 base url
+                server_url = self.vlm_api_base.replace("/v1", "")
+                logger.info(f"🔄 [Accelerate] Switching backend to {backend} using local vLLM: {server_url}")
             elif user_backend == "hybrid-auto-engine":
                 backend = "hybrid-http-client"
-                server_url = self.vlm_api_base
-                logger.info(f"🔄 [Accelerate] Switching backend to {backend} using vLLM")
-        else:
-            if user_backend in ["vlm-auto-engine", "hybrid-auto-engine"]:
-                logger.info(f"ℹ️  Running {user_backend} locally (No vLLM configured)")
+                server_url = self.vlm_api_base.replace("/v1", "")
+                logger.info(f"🔄 [Accelerate] Switching backend to {backend} using local vLLM: {server_url}")
+        
+        # 记录非 Client 模式的情况
+        if backend in ["vlm-auto-engine", "hybrid-auto-engine"] and not server_url:
+            logger.info(f"ℹ️  Running {backend} locally (No vLLM configured)")
 
         # 2. 确定 Method (解析方法)
         # options["method"] 来自 API: auto | txt | ocr
-        # 兼容前端传来的 'ocr' 可能是通过 force_ocr 参数触发的
         parse_method = options.get("method", "auto")
+        # 兼容旧参数 force_ocr
         if options.get("force_ocr"):
             parse_method = "ocr"
 
@@ -165,21 +167,26 @@ class MinerUPipelineEngine:
         formula_enable = options.get("formula_enable", True)
         table_enable = options.get("table_enable", True)
         
-        # 输出控制
-        f_draw_layout_bbox = options.get("draw_layout", True)      # 默认开启，方便调试
-        f_draw_span_bbox = options.get("draw_span", True)          # 默认开启
-        f_dump_md = True                                           # 始终生成 Markdown
-        f_dump_middle_json = True                                  # 始终生成中间 JSON
-        f_dump_model_output = True                                 # 始终生成模型输出
-        f_dump_orig_pdf = True                                     # 始终保存原始 PDF (用于校验)
-        f_dump_content_list = True                                 # 始终生成内容列表
-        
-        # 页面范围 (兼容前端传参：前端可能传 start_page 或 start_page_id)
-        # 优先使用 start_page_id (旧名)，如果没有则尝试 start_page (前端新名)
-        start_page_id = options.get("start_page_id", options.get("start_page", 0))
-        end_page_id = options.get("end_page_id", options.get("end_page", None)) # None 表示处理到最后
+        # 输出控制 (默认开启所有调试输出，方便用户下载)
+        f_draw_layout_bbox = options.get("draw_layout_bbox", True)      
+        f_draw_span_bbox = options.get("draw_span_bbox", True)          
+        f_dump_md = options.get("dump_markdown", True)                  
+        f_dump_middle_json = options.get("dump_middle_json", True)      
+        f_dump_model_output = options.get("dump_model_output", True)    
+        f_dump_content_list = options.get("dump_content_list", True)    
+        f_dump_orig_pdf = options.get("dump_orig_pdf", True)            
 
-        # 处理 -1 或空字符串的情况，确保传递给 do_parse 的是有效值
+        # 兼容旧参数
+        if "draw_layout" in options:
+            f_draw_layout_bbox = options["draw_layout"]
+        if "draw_span" in options:
+            f_draw_span_bbox = options["draw_span"]
+        
+        # 页面范围
+        start_page_id = options.get("start_page_id", options.get("start_page", 0))
+        end_page_id = options.get("end_page_id", options.get("end_page", None))
+
+        # 处理无效值
         if start_page_id is None or str(start_page_id).strip() == "":
             start_page_id = 0
         else:
@@ -223,7 +230,6 @@ class MinerUPipelineEngine:
                 file_name = Path(file_path).name
 
             # 获取语言设置
-            # MinerU 推荐使用明确的语言列表，这里做简单的单语言映射
             lang = options.get("lang", "auto")
             if lang == "auto":
                 lang = "ch"  # 默认中文/通用
@@ -238,9 +244,9 @@ class MinerUPipelineEngine:
                 p_lang_list=[lang],                    # 语言列表
                 
                 # 核心控制参数
-                backend=backend,                       # 后端 (pipeline/vlm-http-client/hybrid-http-client)
-                parse_method=parse_method,             # 解析方法 (auto/txt/ocr)
-                server_url=server_url,                 # VLLM 地址 (http-client 模式必需)
+                backend=backend,                       # 后端
+                parse_method=parse_method,             # 解析方法
+                server_url=server_url,                 # VLLM 地址
                 
                 # 功能开关
                 start_page_id=start_page_id,
@@ -259,8 +265,7 @@ class MinerUPipelineEngine:
             )
 
             # MinerU 新版输出结构: {output_dir}/{file_name}/auto/{file_stem}.md
-            # 递归查找 markdown 文件和 JSON 文件
-            # 注意：do_parse 可能会在 output_dir 下创建以 file_name 为名的子文件夹
+            # 递归查找 markdown 文件
             md_files = list(output_dir.rglob("*.md"))
 
             if md_files:
@@ -273,8 +278,7 @@ class MinerUPipelineEngine:
                 actual_output_dir = md_file.parent
 
                 # 查找 JSON 文件
-                # MinerU 输出的 JSON 文件格式: {filename}_content_list.json, {filename}_middle.json, {filename}_model.json
-                # 我们主要关注 content_list.json（包含结构化内容）
+                # MinerU 输出格式: {filename}_content_list.json
                 json_files = [
                     f
                     for f in actual_output_dir.rglob("*.json")
