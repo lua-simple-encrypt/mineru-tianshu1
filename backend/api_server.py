@@ -12,6 +12,7 @@ import json
 import os
 import re
 import uuid
+import mimetypes  # ✅ 新增：用于自动识别文件类型
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -900,8 +901,13 @@ async def serve_output_file(file_path: str):
         if not full_path.is_file():
             raise HTTPException(status_code=404, detail="Not a file")
 
+        # ✅ 修复：自动猜测 MIME 类型，确保浏览器能正确预览图片/音频/视频
+        media_type, _ = mimetypes.guess_type(full_path)
+        if media_type is None:
+            media_type = "application/octet-stream"
+
         # 返回文件
-        return FileResponse(path=str(full_path), media_type="application/octet-stream", filename=full_path.name)
+        return FileResponse(path=str(full_path), media_type=media_type, filename=full_path.name)
     except HTTPException:
         raise
     except Exception as e:
@@ -941,8 +947,13 @@ async def serve_upload_file(file_path: str):
         if not full_path.is_file():
             raise HTTPException(status_code=404, detail="Not a file")
 
+        # ✅ 修复：自动猜测 MIME 类型，确保浏览器能正确预览图片/音频/视频
+        media_type, _ = mimetypes.guess_type(full_path)
+        if media_type is None:
+            media_type = "application/octet-stream"
+
         # 返回文件
-        return FileResponse(path=str(full_path), media_type="application/octet-stream", filename=full_path.name)
+        return FileResponse(path=str(full_path), media_type=media_type, filename=full_path.name)
     except HTTPException:
         raise
     except Exception as e:
