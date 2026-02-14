@@ -98,7 +98,8 @@ export function formatBackendName(backend: string): string {
     
     // PaddleOCR 系列 (明确版本)
     'paddleocr-vl': 'PaddleOCR-VL v1.5 (0.9B)',
-    'paddleocr-vl-vllm': 'PaddleOCR-VL v1.5 (vLLM)',
+    // ✅ 修复：加上 0.9B
+    'paddleocr-vl-vllm': 'PaddleOCR-VL v1.5 (0.9B) (vLLM)',
     
     // 音视频
     'sensevoice': 'SenseVoice (Audio)',
