@@ -170,14 +170,14 @@ const error = ref('')
 const activeTab = ref<'markdown' | 'json'>('markdown')
 const layoutMode = ref<'single' | 'split'>('split')
 
-// 计算 PDF 的 URL (✅ 核心修复：路径逻辑)
+// 计算 PDF 的 URL
 const pdfUrl = computed(() => {
   // 1. 优先显示后端生成的 MinerU 布局预览 PDF
   // task.data.pdf_path 通常格式为 "uuid/filename_layout.pdf"
   if (task.value?.data?.pdf_path) {
-    // ❌ [删除旧代码] const encodedPath = encodeURIComponent(task.value.data.pdf_path)
-    // ✅ [修复] 直接使用路径。浏览器会自动处理非 ASCII 字符，但保留 "/" 作为路径分隔符。
-    // 如果使用 encodeURIComponent，"/" 会变成 "%2F"，导致后端无法正确路由。
+    // 核心修复：直接使用路径，不使用 encodeURIComponent。
+    // 后端返回的 pdf_path 已经是编码过的安全路径，且包含路径分隔符。
+    // 如果再次编码，"/" 会变成 "%2F"，导致后端 404。
     return `/api/v1/files/output/${task.value.data.pdf_path}`
   }
   
