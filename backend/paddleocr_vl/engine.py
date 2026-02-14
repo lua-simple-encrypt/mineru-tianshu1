@@ -8,7 +8,7 @@ PaddleOCR-VL 解析引擎
 重要提示：
 - PaddleOCR-VL 仅支持 GPU 推理，不支持 CPU 及 Arm 架构
 - GPU 要求：Compute Capability ≥ 8.5 (RTX 3090, A10, A100, H100 等)
-- 支持本地模型加载（/app/models/paddlex/）或自动下载
+- 支持本地模型加载（/app/models/paddlex/）或自动下载（持久化到 /root/.paddlex）
 """
 
 import os
@@ -153,38 +153,31 @@ class PaddleOCRVLEngine:
                     logger.warning("⚠️  CUDA not available, PaddleOCR-VL may not work")
 
                 # =========================================================================
-                # 智能路径解析逻辑 (解决重复下载的核心)
+                # 智能路径解析逻辑 (适配 Docker 持久化挂载)
                 # =========================================================================
-                # 1. 定义本地模型根目录 (指向我们挂载的 /app/models/paddlex)
+                # 1. 优先检查 Docker 挂载的 PADDLEX_HOME 环境变量
+                pdx_home = os.environ.get("PADDLEX_HOME")
+                if pdx_home:
+                    logger.info(f"💾 Using PADDLEX_HOME from env: {pdx_home}")
+                else:
+                    logger.warning("⚠️  PADDLEX_HOME env not set, models might not persist!")
+
+                # 2. 定义手动模型目录 (兼容旧的 pre-download 方式)
                 base_model_dir = Path("/app/models/paddlex")
-                
-                # 2. 尝试拼接本地路径
                 local_model_path = base_model_dir / self.model_name
                 
-                # 默认行为：如果本地没找到，使用模型名称（这将触发 PaddleX 去网络下载）
                 pipeline_source = self.model_name 
 
-                # 3. 设置 PaddleX 缓存目录 [关键修改]
-                # 将 PADDLEX_HOME 设置到挂载卷中，这样即使自动下载，下次重启也在
-                # 这解决了 "Using official model... automatically downloaded" 重复发生的问题
-                cache_dir = base_model_dir / ".paddlex_cache"
-                cache_dir.mkdir(exist_ok=True, parents=True)
-                os.environ["PADDLEX_HOME"] = str(cache_dir)
-                logger.info(f"💾 Set PADDLEX_HOME to: {os.environ['PADDLEX_HOME']}")
-
-                # 4. 严格检查本地模型路径
-                if local_model_path.exists() and local_model_path.is_dir():
-                    # 检查目录下是否有文件，避免空挂载导致 "pipeline does not exist" 错误
-                    if any(local_model_path.iterdir()): 
-                        logger.info(f"📂 Found local model files: {local_model_path}")
-                        # 强制使用本地绝对路径
-                        pipeline_source = str(local_model_path)
-                    else:
-                        logger.warning(f"⚠️  Directory exists but is EMPTY: {local_model_path}")
-                        logger.warning("   Falling back to auto-download mode.")
+                # 3. 检查是否有手动放置的模型文件
+                # 如果用户还是手动把模型放在了 /app/models/paddlex 下，我们优先用它
+                if local_model_path.exists() and local_model_path.is_dir() and any(local_model_path.iterdir()):
+                    logger.info(f"📂 Found manual local model: {local_model_path}")
+                    pipeline_source = str(local_model_path)
                 else:
-                    logger.warning(f"⚠️  Local model path not found: {local_model_path}")
-                    logger.info(f"   Will attempt to download '{self.model_name}' to cache...")
+                    # 默认情况：使用模型名称，触发 PaddleX 自动下载
+                    # 因为我们挂载了 PADDLEX_HOME，所以下载会持久化
+                    logger.info(f"🌐 Model not found locally, will use auto-download: '{self.model_name}'")
+                    logger.info(f"   Target: {pdx_home if pdx_home else 'System Default Cache'}")
 
                 # 初始化管道
                 start_time = time.time()
@@ -211,9 +204,9 @@ class PaddleOCRVLEngine:
                 logger.error(f"   错误信息: {e}")
                 logger.error("")
                 logger.error("💡 排查建议:")
-                logger.error("   1. 检查 /app/models/paddlex/ 目录是否挂载正确")
-                logger.error("   2. 检查目录是否为空")
-                logger.error("   3. 检查显存和 CUDA 版本")
+                logger.error("   1. 检查网络连接（首次运行需要下载模型）")
+                logger.error("   2. 检查显存是否充足")
+                logger.error("   3. 检查 CUDA 版本兼容性")
                 logger.error("=" * 80)
 
                 import traceback
