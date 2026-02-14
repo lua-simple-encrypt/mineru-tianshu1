@@ -4,11 +4,12 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { taskApi } from '@/api'
-import type { Task, SubmitTaskRequest, TaskStatus } from '@/api/types'
+import type { Task, SubmitTaskRequest, TaskQueryParams } from '@/api/types'
 
 export const useTaskStore = defineStore('task', () => {
   // 状态
   const tasks = ref<Task[]>([])
+  const total = ref(0) // 新增：总记录数 (用于分页)
   const currentTask = ref<Task | null>(null)
   const loading = ref(false)
   const error = ref<string | null>(null)
@@ -41,7 +42,8 @@ export const useTaskStore = defineStore('task', () => {
     try {
       const response = await taskApi.submitTask(request)
 
-      // 添加到任务列表
+      // 添加到任务列表顶部 (如果当前在第一页)
+      // 注意：这里只是为了即时反馈，实际上刷新列表后会重新排序
       const newTask: Task = {
         task_id: response.task_id,
         file_name: response.file_name,
@@ -58,6 +60,8 @@ export const useTaskStore = defineStore('task', () => {
       }
 
       tasks.value.unshift(newTask)
+      total.value += 1 // 更新总数
+      
       return response
     } catch (err: any) {
       error.value = err.message || '提交任务失败'
@@ -87,6 +91,8 @@ export const useTaskStore = defineStore('task', () => {
       const response = await taskApi.getTaskStatus(taskId, uploadImages, format)
       
       // 构建完整的 Task 对象
+      // 注意：API 返回的 TaskStatusResponse 包含 Task 的所有字段
+      // 这里确保类型安全并处理可选字段
       const updatedTask: Task = {
         task_id: response.task_id,
         file_name: response.file_name,
@@ -100,7 +106,10 @@ export const useTaskStore = defineStore('task', () => {
         worker_id: response.worker_id,
         retry_count: response.retry_count,
         result_path: null, // API 响应中通常没有这个字段，或者叫 result_dir
+        source_url: response.source_url, // ✅ 确保包含源文件链接
         data: response.data, // 这里包含了 content, json_content, pdf_path 等
+        is_parent: response.is_parent,
+        subtask_progress: response.subtask_progress,
       }
 
       currentTask.value = updatedTask
@@ -114,7 +123,8 @@ export const useTaskStore = defineStore('task', () => {
             status: updatedTask.status,
             completed_at: updatedTask.completed_at,
             started_at: updatedTask.started_at,
-            error_message: updatedTask.error_message
+            error_message: updatedTask.error_message,
+            subtask_progress: updatedTask.subtask_progress // 同步进度信息
         }
       }
 
@@ -155,15 +165,16 @@ export const useTaskStore = defineStore('task', () => {
   }
 
   /**
-   * 获取任务列表
+   * 获取任务列表 (支持分页、筛选、搜索)
    */
-  async function fetchTasks(status?: TaskStatus, limit: number = 100) {
+  async function fetchTasks(params: TaskQueryParams) {
     loading.value = true
     error.value = null
 
     try {
-      const response = await taskApi.listTasks(status, limit)
+      const response = await taskApi.listTasks(params)
       tasks.value = response.tasks
+      total.value = response.total // ✅ 更新总数
       return response
     } catch (err: any) {
       error.value = err.message || '获取任务列表失败'
@@ -240,6 +251,7 @@ export const useTaskStore = defineStore('task', () => {
    */
   function reset() {
     tasks.value = []
+    total.value = 0
     currentTask.value = null
     loading.value = false
     error.value = null
@@ -248,6 +260,7 @@ export const useTaskStore = defineStore('task', () => {
   return {
     // 状态
     tasks,
+    total, // ✅ 导出 total
     currentTask,
     loading,
     error,
