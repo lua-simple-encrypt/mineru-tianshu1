@@ -641,7 +641,8 @@ class MinerUWorkerAPI(ls.LitAPI):
                 # 确保 Paddle 运行，关闭 MinerU
                 self.vllm_controller.ensure_service(paddle_container, mineru_container, health)
                 
-            # 如果是 MinerU 任务
+            # 如果是 MinerU 任务 (vlm/hybrid local 模式)
+            # 注意: remote client 模式不需要启动本地容器
             elif backend in ["vlm-auto-engine", "hybrid-auto-engine"] and self.mineru_vllm_api:
                 base = self.mineru_vllm_api.replace("/v1", "")
                 health = f"{base}/health"
@@ -724,8 +725,8 @@ class MinerUWorkerAPI(ls.LitAPI):
                 logger.info(f"🔍 Processing with PaddleOCR-VL-VLLM: {file_path}")
                 result = self._process_with_paddleocr_vl_vllm(file_path, options)
             
-            # 6. 用户指定了 MinerU 的某种模式 (pipeline, vlm, hybrid)
-            elif backend in ["pipeline", "vlm-auto-engine", "hybrid-auto-engine"]:
+            # 6. 用户指定了 MinerU 的某种模式 (pipeline, vlm-*, hybrid-*)
+            elif "pipeline" in backend or "vlm-" in backend or "hybrid-" in backend:
                 if not MINERU_PIPELINE_AVAILABLE:
                     raise ValueError(f"MinerU Pipeline engine is not available, cannot run {backend}")
                 
@@ -788,13 +789,13 @@ class MinerUWorkerAPI(ls.LitAPI):
                         # 未知的 backend
                         raise ValueError(
                             f"Unknown backend: {backend}. "
-                            f"Supported backends: auto, pipeline, vlm-auto-engine, hybrid-auto-engine, paddleocr-vl, sensevoice, video, fasta, genbank"
+                            f"Supported backends: auto, pipeline, vlm-*, hybrid-*, paddleocr-vl, sensevoice, video, fasta, genbank"
                         )
                 else:
                     # 格式引擎不可用
                     raise ValueError(
                         f"Unknown backend: {backend}. "
-                        f"Supported backends: auto, pipeline, vlm-auto-engine, hybrid-auto-engine, paddleocr-vl, sensevoice, video"
+                        f"Supported backends: auto, pipeline, vlm-*, hybrid-*, paddleocr-vl, sensevoice, video"
                     )
 
             # 检查 result 是否被正确赋值
@@ -857,7 +858,7 @@ class MinerUWorkerAPI(ls.LitAPI):
             # 该进程只能看到一个 GPU（映射为 cuda:0）
             self.mineru_pipeline_engine = MinerUPipelineEngine(
                 device=self.engine_device,
-                vlm_api_base=self.mineru_vllm_api  # 传入 MinerU API 地址
+                vlm_api_base=self.mineru_vllm_api  # 传入 MinerU API 地址 (本地服务)
             )
             if self.accelerator == "cuda":
                 gpu_id = os.environ.get("CUDA_VISIBLE_DEVICES", "?")
@@ -868,6 +869,17 @@ class MinerUWorkerAPI(ls.LitAPI):
         # 设置输出目录
         output_dir = Path(self.output_dir) / Path(file_path).stem
         output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 检查是否是远程模式
+        backend = options.get("parse_mode", "pipeline")
+        if "http-client" in backend:
+            # 如果是客户端模式，必须有 server_url
+            if not options.get("server_url"):
+                logger.warning(f"⚠️  Remote backend {backend} selected but no server_url provided in options.")
+                # 尝试回退到默认本地服务（如果有）
+                if self.mineru_vllm_api:
+                     options["server_url"] = self.mineru_vllm_api.replace("/v1", "") # 去掉 /v1
+                     logger.info(f"   Using default local server: {options['server_url']}")
 
         # 处理文件
         result = self.mineru_pipeline_engine.parse(file_path, output_path=str(output_dir), options=options)
