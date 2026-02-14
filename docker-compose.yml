@@ -48,7 +48,7 @@ services:
       - tianshu-network
 
   # ============================================================================
-  # Model Initializer (用于下载非 Paddle 模型)
+  # Model Initializer (用于预先下载必要模型)
   # ============================================================================
   init-models:
     image: tianshu-backend:latest
@@ -57,7 +57,7 @@ services:
     volumes:
       # 挂载主模型目录
       - ./models:/app/models:rw
-      # ✅ [新增] 确保初始化脚本也能看到缓存目录（虽然主要由 Worker 下载）
+      # 确保初始化脚本也能看到并写入缓存目录
       - ./models/paddlex_cache:/root/.paddlex:rw
       - ./models/paddleocr_cache:/root/.paddleocr:rw
       - ./magic-pdf.json:/app/magic-pdf.json:rw
@@ -85,7 +85,6 @@ services:
       - "${API_PORT:-8000}:8000"
     volumes:
       - ./models:/app/models:rw
-      # ✅ [新增] 挂载 Paddle 持久化缓存目录
       - ./models/paddlex_cache:/root/.paddlex:rw
       - ./models/paddleocr_cache:/root/.paddleocr:rw
       - ./magic-pdf.json:/root/magic-pdf.json:ro
@@ -139,7 +138,7 @@ services:
       - "30023:30023"
     volumes:
       - ./models:/models:ro
-      # ✅ [新增] 修复路径映射：将宿主机缓存中的具体模型目录映射到容器内 vLLM 预期的位置
+      # 映射下载脚本预先缓存好的 VLLM 权重目录
       - ./models/paddlex_cache/official_models/PaddleOCR-VL-1.5-0.9B:/models/paddlex/PaddleOCR-VL-1.5-0.9B:ro
       - ./models/paddlex_cache:/root/.paddlex:ro
       - /etc/localtime:/etc/localtime:ro
@@ -166,6 +165,10 @@ services:
               capabilities: [gpu]
     networks:
       - tianshu-network
+    depends_on:
+      # ✅ [核心修改] 强制要求等待预下载脚本执行完毕，防止 vLLM 找不到模型一直崩溃重启
+      init-models:
+        condition: service_completed_successfully
 
   # ============================================================================
   # vLLM Service - MinerU
@@ -202,6 +205,10 @@ services:
               capabilities: [gpu]
     networks:
       - tianshu-network
+    # 如果你也经常手动启动 vllm-mineru 且 MinerU2.5 模型也是用 init-models 下载，建议也加上依赖：
+    depends_on:
+      init-models:
+        condition: service_completed_successfully
 
   # ============================================================================
   # Worker
@@ -224,7 +231,6 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./models:/app/models:rw
-      # ✅ [核心修改] 挂载 Paddle 持久化缓存目录到容器的 root 用户目录下
       - ./models/paddlex_cache:/root/.paddlex:rw
       - ./models/paddleocr_cache:/root/.paddleocr:rw
       - ./magic-pdf.json:/root/magic-pdf.json:ro
@@ -261,7 +267,6 @@ services:
       - REDIS_QUEUE_ENABLED=${REDIS_QUEUE_ENABLED:-false}
       - REDIS_HOST=${REDIS_HOST:-redis}
       - REDIS_PORT=${REDIS_PORT:-6379}
-      # ✅ [核心修改] 更新环境变量指向挂载点
       - PADDLE_HOME=/root/.paddleocr
       - PADDLEX_HOME=/root/.paddlex
     mem_limit: ${WORKER_MEMORY_LIMIT:-16G}
