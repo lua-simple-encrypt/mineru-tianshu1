@@ -86,7 +86,6 @@
             <hr class="border-gray-100" />
 
             <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
-              
               <div class="col-span-1 md:col-span-2">
                 <label class="block text-sm font-bold text-gray-800 mb-1.5">{{ $t('task.backend') }}</label>
                 <div class="relative">
@@ -97,13 +96,13 @@
                   >
                     <option value="auto">{{ $t('task.backendAuto') }}</option>
                     
-                    <optgroup label="MinerU (本地 Local)">
+                    <optgroup label="MinerU (Local)">
                       <option value="pipeline">{{ $t('task.backendPipeline') }}</option>
                       <option value="hybrid-auto-engine">{{ $t('task.backendHybridAutoEngine') }}</option>
                       <option value="vlm-auto-engine">{{ $t('task.backendVlmAutoEngine') }}</option>
                     </optgroup>
 
-                    <optgroup label="MinerU (远程 Client)">
+                    <optgroup label="MinerU (Remote Client)">
                       <option value="hybrid-http-client">{{ $t('task.backendHybridHttpClient') }}</option>
                       <option value="vlm-http-client">{{ $t('task.backendVlmHttpClient') }}</option>
                     </optgroup>
@@ -164,10 +163,10 @@
                    <option value="txt">{{ $t('task.methodTxt') }}</option>
                 </select>
               </div>
-              
+
               <div v-else-if="showLanguageOption" class="col-span-1">
-                 <label class="block text-sm font-medium text-gray-700 mb-1.5">{{ $t('task.priorityLabel') }}</label>
-                 <input v-model.number="config.priority" type="number" min="0" max="100" class="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm" />
+                <label class="block text-sm font-medium text-gray-700 mb-1.5">{{ $t('task.priorityLabel') }}</label>
+                <input v-model.number="config.priority" type="number" min="0" max="100" class="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm" />
               </div>
             </div>
 
@@ -193,7 +192,7 @@
                   <p class="text-xs text-gray-500 pl-6">{{ formulaDescription }}</p>
                 </div>
               </div>
-              
+
               <div v-if="config.method !== 'auto'" class="mt-2 text-xs text-orange-600 bg-orange-50 p-2 rounded border border-orange-100 flex items-start">
                  <AlertCircle class="w-3.5 h-3.5 mr-1.5 mt-0.5 flex-shrink-0" />
                  <span>{{ $t('task.methodHint') }}</span>
@@ -401,7 +400,6 @@ const defaultConfig = {
   backend: 'auto' as Backend,
   lang: 'auto' as Language,
   method: 'auto' as ParseMethod,
-  // force_ocr 已废弃，使用 method='ocr'
   formula_enable: true,
   table_enable: true,
   priority: 0,
@@ -422,14 +420,14 @@ const defaultConfig = {
   // 远程服务
   server_url: '',
 
-  // Mineru 调试输出 (do_parse options)
-  draw_layout_bbox: true, // f_draw_layout_bbox
-  draw_span_bbox: true,   // f_draw_span_bbox
-  dump_markdown: true,    // f_dump_md
-  dump_middle_json: true, // f_dump_middle_json
-  dump_model_output: true,// f_dump_model_output
-  dump_content_list: true,// f_dump_content_list
-  dump_orig_pdf: true     // f_dump_orig_pdf
+  // Mineru Debug Options (Default: True as per source code)
+  draw_layout_bbox: true, 
+  draw_span_bbox: true,   
+  dump_markdown: true,    
+  dump_middle_json: true, 
+  dump_model_output: true,
+  dump_content_list: true,
+  dump_orig_pdf: true     
 }
 
 const config = reactive({ ...defaultConfig })
@@ -438,11 +436,10 @@ const config = reactive({ ...defaultConfig })
 function applyPreset(preset: any) {
   currentPreset.value = preset.id
   Object.assign(config, preset.config)
-  // 针对扫描件预设的特殊处理
   if (preset.id === 'scanned') config.remove_watermark = true
 }
 
-// 计算属性：后端分类
+// 后端分类
 const mineruBackends = ['pipeline', 'vlm-auto-engine', 'hybrid-auto-engine', 'vlm-http-client', 'hybrid-http-client']
 const isMinerUBackend = computed(() => mineruBackends.includes(config.backend))
 const isHttpClientBackend = computed(() => ['vlm-http-client', 'hybrid-http-client'].includes(config.backend))
@@ -479,7 +476,6 @@ const availableLanguages = computed(() => {
     { value: 'en', label: t('task.langEnglish') }
   ]
   
-  // VLM 仅支持中英
   if (config.backend.includes('vlm')) {
     return [
        { value: 'ch', label: t('task.langChinese') },
@@ -487,7 +483,6 @@ const availableLanguages = computed(() => {
     ]
   }
   
-  // Pipeline / Hybrid 支持 Mineru 的全套语言
   if (isMinerUBackend.value) {
     return [
       ...commonLangs,
@@ -512,7 +507,6 @@ const availableLanguages = computed(() => {
     ]
   }
 
-  // 默认返回通用语言
   return commonLangs
 })
 
@@ -520,8 +514,6 @@ function onFilesChange(newFiles: File[]) { files.value = newFiles }
 
 function onBackendChange() { 
   currentPreset.value = 'custom'; 
-  
-  // 如果切换到 VLM，强制重置语言为中文或英文
   if (config.backend.includes('vlm')) {
      if (!['ch', 'en'].includes(config.lang)) {
         config.lang = 'ch' 
@@ -551,7 +543,6 @@ function resetForm() {
 async function submitTasks() {
   if (files.value.length === 0) { errorMessage.value = t('task.pleaseSelectFile'); return }
   
-  // 参数校验
   if (config.start_page !== undefined && config.end_page !== undefined && config.end_page !== -1) {
     if (config.end_page < config.start_page) {
       errorMessage.value = t('task.pageError')
