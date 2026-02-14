@@ -151,10 +151,19 @@ const layoutMode = ref<'single' | 'split'>('split') // 默认开启分屏
 
 // 计算 PDF 的 URL
 const pdfUrl = computed(() => {
-  if (!task.value?.data?.pdf_path) return null
-  // 必须对路径进行编码，处理中文文件名
-  const encodedPath = encodeURIComponent(task.value.data.pdf_path)
-  return `/api/v1/files/output/${encodedPath}`
+  // 1. 优先显示后端生成的预览 PDF (如 _layout.pdf)
+  if (task.value?.data?.pdf_path) {
+    // 必须对路径进行编码，处理中文文件名
+    const encodedPath = encodeURIComponent(task.value.data.pdf_path)
+    return `/api/v1/files/output/${encodedPath}`
+  }
+  
+  // 2. 如果没有生成文件（或还在处理中），回退显示上传的源文件
+  if (task.value?.source_url) {
+    return task.value.source_url
+  }
+
+  return null
 })
 
 let stopPolling: (() => void) | null = null
