@@ -90,40 +90,75 @@ export type TaskStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'ca
 
 // 后端类型
 export type Backend =
-  | 'auto'  // 自动选择引擎
-  | 'pipeline' // MinerU Pipeline (传统多模型管道)
-  | 'vlm-auto-engine' // MinerU VLM 自动 (视觉大模型)
-  | 'hybrid-auto-engine' // MinerU 混合高精度
-  | 'vlm-transformers' // (保留旧的，视情况可弃用)
-  | 'vlm-vllm-engine'  // (保留旧的，视情况可弃用)
+  | 'auto'              // 自动选择引擎
+  | 'pipeline'          // MinerU Pipeline (传统多模型管道)
+  | 'vlm-auto-engine'   // MinerU VLM 自动 (视觉大模型 - 本地)
+  | 'hybrid-auto-engine'// MinerU 混合高精度 (本地)
+  | 'vlm-http-client'   // [新增] MinerU VLM Client (远程)
+  | 'hybrid-http-client'// [新增] MinerU Hybrid Client (远程)
   | 'paddleocr-vl'
   | 'paddleocr-vl-vllm'
   | 'sensevoice'
   | 'video'
-  | 'fasta'  // FASTA 生物序列格式
-  | 'genbank'  // GenBank 基因序列注释格式
+  | 'fasta'             // FASTA 生物序列格式
+  | 'genbank'           // GenBank 基因序列注释格式
+  | 'vlm-transformers'  // (已废弃，保留兼容)
+  | 'vlm-vllm-engine'   // (已废弃，保留兼容)
 
-// 语言类型
-export type Language = 'auto' | 'ch' | 'en' | 'korean' | 'japan'
+// 语言类型 (扩充以支持 MinerU 所有语言)
+export type Language = 
+  | 'auto' 
+  | 'ch' | 'en' | 'korean' | 'japan' 
+  | 'chinese_cht' // 繁体中文
+  | 'ch_server' | 'ch_lite' 
+  | 'th' // 泰语
+  | 'vi' // 越南语
+  | 'ru' // 俄语
+  | 'ar' // 阿拉伯语
+  | 'fr' // 法语
+  | 'de' // 德语
+  | 'ta' // 泰米尔语
+  | 'te' // 泰卢固语
+  | 'ka' // 卡纳达语
+  | 'el' // 希腊语
+  | 'latin' // 拉丁语系
+  | 'cyrillic' // 西里尔语系
+  | 'devanagari' // 梵文
 
 // 解析方法
 export type ParseMethod = 'auto' | 'txt' | 'ocr'
 
-// 任务配置选项
+// 任务配置选项 (对应数据库存储的 JSON 结构)
 export interface TaskOptions {
   lang: Language
   method: ParseMethod
   formula_enable: boolean
   table_enable: boolean
-  // 新增选项
+  priority?: number
+  
+  // 分页
   start_page?: number
   end_page?: number
+  
+  // 远程配置
+  server_url?: string
+
+  // 调试与输出控制
+  draw_layout_bbox?: boolean
+  draw_span_bbox?: boolean
+  dump_markdown?: boolean
+  dump_middle_json?: boolean
+  dump_model_output?: boolean
+  dump_content_list?: boolean
+  dump_orig_pdf?: boolean
+  
+  // 旧字段兼容
   force_ocr?: boolean
   draw_layout?: boolean
   draw_span?: boolean
 }
 
-// 任务提交请求
+// 任务提交请求 (前端 Form 表单数据)
 export interface SubmitTaskRequest {
   file: File
   backend?: Backend
@@ -133,14 +168,26 @@ export interface SubmitTaskRequest {
   table_enable?: boolean
   priority?: number
   
-  // 页码范围 (新增)
+  // 页码范围
   start_page?: number
   end_page?: number
 
-  // MinerU 高级调试参数
-  draw_layout?: boolean // 是否绘制布局边框
-  draw_span?: boolean   // 是否绘制文本Span边框
-  force_ocr?: boolean   // 是否强制OCR
+  // 远程服务地址 (Client 模式必填)
+  server_url?: string
+
+  // MinerU 详细调试参数
+  draw_layout_bbox?: boolean // 是否绘制布局边框
+  draw_span_bbox?: boolean   // 是否绘制文本Span边框
+  dump_markdown?: boolean
+  dump_middle_json?: boolean
+  dump_model_output?: boolean
+  dump_content_list?: boolean
+  dump_orig_pdf?: boolean
+
+  // 兼容旧字段 (即将废弃)
+  draw_layout?: boolean 
+  draw_span?: boolean   
+  force_ocr?: boolean    
 
   // Video 专属参数
   keep_audio?: boolean
@@ -182,7 +229,7 @@ export interface Task {
     json_file?: string
     json_content?: any
     json_available?: boolean
-    pdf_path?: string // (新增) 用于分屏对比显示的 PDF 路径
+    pdf_path?: string // 用于分屏对比显示的 PDF 路径
   } | null
 }
 
@@ -218,7 +265,7 @@ export interface TaskStatusResponse {
     json_file?: string
     json_content?: any
     json_available?: boolean
-    pdf_path?: string // (新增) 用于分屏对比显示的 PDF 路径
+    pdf_path?: string 
   } | null
   message?: string
 }
