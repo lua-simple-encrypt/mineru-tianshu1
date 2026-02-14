@@ -168,7 +168,7 @@ services:
     ports:
       - "30023:30023"
     volumes:
-      # 只读挂载模型根目录，避免嵌套挂载错误
+      # 只读挂载模型根目录
       - ./models:/models:ro
       # 挂载 PaddleX 缓存目录到 root 用户目录，供 vLLM 读取
       - ./models/paddlex_cache:/root/.paddlex:ro
