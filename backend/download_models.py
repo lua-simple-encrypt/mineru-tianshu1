@@ -8,6 +8,8 @@
    - 它们将在容器运行时由引擎自动下载。
    - 数据会持久化保存到宿主机的 ./models/paddlex_cache 和 ./models/paddleocr_cache 目录中。
    - (通过 docker-compose.yml 的 /root/.paddlex 和 /root/.paddleocr 挂载实现)
+3. 配置文件生成:
+   - 自动在模型目录生成 magic-pdf.json，供 entrypoint 脚本分发到各服务。
 """
 
 import os
@@ -241,7 +243,7 @@ def download_from_huggingface(repo_id, target_dir, filename=None):
         os.environ.setdefault("HF_ENDPOINT", hf_endpoint)
         
         if filename:
-            logger.info(f"   Downloading file: {filename}")
+            logger.info(f"    Downloading file: {filename}")
             path = hf_hub_download(
                 repo_id=repo_id, 
                 filename=filename, 
@@ -250,7 +252,7 @@ def download_from_huggingface(repo_id, target_dir, filename=None):
                 resume_download=True
             )
         else:
-            logger.info(f"   Downloading repository: {repo_id}")
+            logger.info(f"    Downloading repository: {repo_id}")
             path = snapshot_download(
                 repo_id=repo_id, 
                 local_dir=str(target_dir), 
@@ -259,7 +261,7 @@ def download_from_huggingface(repo_id, target_dir, filename=None):
             )
         return path
     except Exception as e:
-        logger.error(f"   ❌ Download failed: {e}")
+        logger.error(f"    ❌ Download failed: {e}")
         return None
 
 def download_from_modelscope(model_id, target_dir):
@@ -267,7 +269,7 @@ def download_from_modelscope(model_id, target_dir):
     try:
         from modelscope import snapshot_download
         
-        logger.info(f"   Downloading from ModelScope: {model_id}")
+        logger.info(f"    Downloading from ModelScope: {model_id}")
         path = snapshot_download(
             model_id, 
             local_dir=str(target_dir), 
@@ -275,7 +277,7 @@ def download_from_modelscope(model_id, target_dir):
         )
         return path
     except Exception as e:
-        logger.error(f"   ❌ Download failed: {e}")
+        logger.error(f"    ❌ Download failed: {e}")
         return None
 
 # ==============================================================================
@@ -291,19 +293,19 @@ def verify_model_files(path, model_name):
     if model_name == "mineru_pipeline":
         if not (any(path_obj.rglob("*.safetensors")) or any(path_obj.rglob("*.bin"))):
             if (path_obj / "models").exists(): return True
-            logger.warning(f"   ⚠️  No model files in {path}")
+            logger.warning(f"    ⚠️  No model files in {path}")
             return False
             
     # 2. MinerU VLM
     elif model_name == "mineru_vlm":
         if not any(path_obj.rglob("*.safetensors")):
-            logger.warning(f"   ⚠️  No safetensors found in {path}")
+            logger.warning(f"    ⚠️  No safetensors found in {path}")
             return False
     
     # 3. PaddleOCR-VL VLM 模型验证
     elif model_name in ["paddleocr_vl_1_5", "paddleocr_vl_0_9"]:
         if not any(path_obj.rglob("*.safetensors")):
-            logger.warning(f"   ⚠️  No safetensors found in {path}")
+            logger.warning(f"    ⚠️  No safetensors found in {path}")
             return False
             
     # 4. YOLO (单文件或目录)
@@ -312,10 +314,10 @@ def verify_model_files(path, model_name):
             if path_obj.suffix != ".pt":
                 return False
         elif not list(path_obj.rglob("*.pt")):
-            logger.warning(f"   ⚠️  No .pt files found")
+            logger.warning(f"    ⚠️  No .pt files found")
             return False
             
-    logger.info(f"   ✅ Model files verified")
+    logger.info(f"    ✅ Model files verified")
     return True
 
 def get_directory_size(path):
@@ -334,12 +336,16 @@ def check_model_exists(output_path, config, name):
     return False, "Dir empty"
 
 def generate_magic_pdf_json(output_dir):
-    """生成 magic-pdf.json，同时配置 Pipeline 和 VLM"""
-    project_root = Path(output_dir).parent
-    config_path = project_root / "magic-pdf.json"
+    """
+    生成 magic-pdf.json
+    ✅ [核心修复] 将配置文件直接保存到共享的 models 目录下 (output_dir)，
+    这样该文件会持久化到宿主机 ./models/magic-pdf.json，
+    并由 docker-entrypoint.sh 脚本分发到其他容器。
+    """
+    # 务必直接使用 output_dir (即 /app/models)，不要使用 .parent
+    config_path = Path(output_dir) / "magic-pdf.json"
     
-    # 注意：这里的路径是 Docker 容器内的路径
-    # models-dir 指向 MinerU Pipeline 的 models 子目录
+    # 注意：这里的 paths 是容器内的绝对路径
     config_content = r"""{
   "models-dir": "/app/models/PDF-Extract-Kit-1.0/models",
   "vlm-models-dir": "/app/models/MinerU2.5-2509-1.2B",
@@ -356,7 +362,7 @@ def generate_magic_pdf_json(output_dir):
         with open(config_path, "w", encoding="utf-8") as f:
             f.write(config_content)
         logger.success(f"✅ Configuration file created at: {config_path}")
-        logger.info("   -> Confirmed support for: pipeline, vlm-auto-engine, hybrid-auto-engine")
+        logger.info("    -> Confirmed support for: pipeline, vlm-auto-engine, hybrid-auto-engine")
     except Exception as e:
         logger.error(f"❌ Failed to create config: {e}")
 
@@ -388,8 +394,8 @@ def main(output_dir, selected_models=None, force=False):
         try:
             # 策略：自动下载模型（Paddle等）直接跳过
             if config.get("auto_download"):
-                logger.info(f"   ℹ️  {name} will be auto-downloaded by runtime engine")
-                logger.info(f"       Target: {config.get('description', 'Cache directory')}")
+                logger.info(f"    ℹ️  {name} will be auto-downloaded by runtime engine")
+                logger.info(f"        Target: {config.get('description', 'Cache directory')}")
                 manifest["models"][name] = {"status": "auto_download"}
                 continue
 
@@ -400,15 +406,15 @@ def main(output_dir, selected_models=None, force=False):
                 exists, reason = check_model_exists(output_path, config, name)
                 if exists:
                     size_mb = get_directory_size(target)
-                    logger.info(f"   ✅ Already exists ({size_mb:.1f} MB)")
-                    logger.info(f"   📂 Path: {target}")
+                    logger.info(f"    ✅ Already exists ({size_mb:.1f} MB)")
+                    logger.info(f"    📂 Path: {target}")
                     manifest["models"][name] = {"status": "exists", "path": str(target), "size_mb": round(size_mb, 2)}
                     total_skip += 1
                     logger.info("")
                     continue
 
             # 下载
-            logger.info(f"   ⬇️  Downloading to {config['target_dir']}...")
+            logger.info(f"    ⬇️  Downloading to {config['target_dir']}...")
             path = None
             src = config["source"]
             
@@ -427,24 +433,25 @@ def main(output_dir, selected_models=None, force=False):
             if path and verify_model_files(path, name):
                 size_mb = get_directory_size(path)
                 manifest["models"][name] = {"status": "downloaded", "path": str(path)}
-                logger.info(f"   ✅ Success ({size_mb:.1f} MB)")
-                logger.info(f"   📂 Path: {path}")
+                logger.info(f"    ✅ Success ({size_mb:.1f} MB)")
+                logger.info(f"    📂 Path: {path}")
                 total_dl += 1
             else:
-                logger.error(f"   ❌ Validation failed for {name}")
+                logger.error(f"    ❌ Validation failed for {name}")
                 if config.get("required", False):
                     total_fail += 1
                 else:
-                    logger.warning(f"   ⚠️ [IGNORED] Optional model {name} failed, but not required. Skipping...")
+                    logger.warning(f"    ⚠️ [IGNORED] Optional model {name} failed, but not required. Skipping...")
 
         except Exception as e:
-            logger.error(f"   ❌ Error: {e}")
+            logger.error(f"    ❌ Error: {e}")
             if config.get("required", False):
                 total_fail += 1
             else:
-                logger.warning(f"   ⚠️ [IGNORED] Optional model {name} failed, but not required. Skipping...")
+                logger.warning(f"    ⚠️ [IGNORED] Optional model {name} failed, but not required. Skipping...")
         logger.info("")
 
+    # 无论模型下载成功与否，都尝试生成配置文件，确保容器有配置可用
     generate_magic_pdf_json(output_path)
     
     with open(output_path / "manifest.json", "w", encoding="utf-8") as f:
