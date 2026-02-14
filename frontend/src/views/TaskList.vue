@@ -88,7 +88,7 @@
           <div class="relative">
             <input
               v-model="filters.search"
-              @input="applyFilters"
+              @change="applyFilters" 
               type="text"
               :placeholder="$t('common.search') + ' (' + $t('task.fileName') + ' / ID)'"
               class="w-full pl-9 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm"
@@ -127,7 +127,7 @@
         <LoadingSpinner size="lg" :text="$t('common.loading')" />
       </div>
 
-      <div v-else-if="filteredTasks.length === 0" class="flex flex-col items-center justify-center py-20 text-gray-500">
+      <div v-else-if="tasks.length === 0" class="flex flex-col items-center justify-center py-20 text-gray-500">
         <div class="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mb-4">
           <FileQuestion class="w-8 h-8 text-gray-400" />
         </div>
@@ -169,7 +169,7 @@
           </thead>
           <tbody class="bg-white divide-y divide-gray-100">
             <tr
-              v-for="task in paginatedTasks"
+              v-for="task in tasks"
               :key="task.task_id"
               :class="{'bg-blue-50/30': selectedTasks.includes(task.task_id)}"
               class="hover:bg-gray-50/80 transition-colors group"
@@ -242,13 +242,13 @@
         </table>
       </div>
 
-      <div v-if="filteredTasks.length > 0" class="bg-gray-50 px-6 py-4 border-t border-gray-200 flex items-center justify-between">
+      <div v-if="total > 0" class="bg-gray-50 px-6 py-4 border-t border-gray-200 flex items-center justify-between">
         <div class="text-sm text-gray-500 hidden sm:block">
-           {{ $t('common.pagination', { start: (currentPage - 1) * pageSize + 1, end: Math.min(currentPage * pageSize, filteredTasks.length), total: filteredTasks.length }) }}
+           {{ $t('common.pagination', { start: (currentPage - 1) * pageSize + 1, end: Math.min(currentPage * pageSize, total), total: total }) }}
         </div>
         <div class="flex gap-2 w-full sm:w-auto justify-between sm:justify-end">
           <button
-            @click="currentPage--"
+            @click="changePage(currentPage - 1)"
             :disabled="currentPage === 1"
             class="p-2 bg-white border border-gray-300 rounded-md text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-colors"
           >
@@ -260,7 +260,7 @@
             <span class="text-sm text-gray-500">{{ totalPages }}</span>
           </div>
           <button
-            @click="currentPage++"
+            @click="changePage(currentPage + 1)"
             :disabled="currentPage === totalPages"
             class="p-2 bg-white border border-gray-300 rounded-md text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-colors"
           >
@@ -297,8 +297,11 @@ import type { TaskStatus, Backend } from '@/api/types'
 const { t } = useI18n()
 const taskStore = useTaskStore()
 
+// 使用 store 中的状态
 const tasks = computed(() => taskStore.tasks)
+const total = computed(() => taskStore.total) // 从 store 获取总数
 const loading = ref(false)
+
 const autoRefresh = ref(false)
 let refreshInterval: number | null = null
 
@@ -308,34 +311,9 @@ const filters = ref({
   search: '',
 })
 
-// 筛选逻辑
-const filteredTasks = computed(() => {
-  let result = tasks.value
-  if (filters.value.status) {
-    result = result.filter(t => t.status === filters.value.status)
-  }
-  if (filters.value.backend) {
-    result = result.filter(t => t.backend === filters.value.backend)
-  }
-  if (filters.value.search) {
-    const search = filters.value.search.toLowerCase().trim()
-    result = result.filter(t =>
-      t.file_name.toLowerCase().includes(search) ||
-      t.task_id.toLowerCase().includes(search)
-    )
-  }
-  return result
-})
-
-// 分页逻辑
 const pageSize = 20
 const currentPage = ref(1)
-const totalPages = computed(() => Math.ceil(filteredTasks.value.length / pageSize) || 1)
-const paginatedTasks = computed(() => {
-  const start = (currentPage.value - 1) * pageSize
-  const end = start + pageSize
-  return filteredTasks.value.slice(start, end)
-})
+const totalPages = computed(() => Math.ceil(total.value / pageSize) || 1)
 
 // 批量选择
 const selectedTasks = ref<string[]>([])
@@ -343,21 +321,22 @@ const selectAll = ref(false)
 
 function toggleSelectAll() {
   if (selectAll.value) {
-    selectedTasks.value = paginatedTasks.value.map(t => t.task_id)
+    // 仅选中当前页的任务
+    selectedTasks.value = tasks.value.map(t => t.task_id)
   } else {
     selectedTasks.value = []
   }
 }
 
-watch(paginatedTasks, () => {
+watch(currentPage, () => {
   selectAll.value = false
+  selectedTasks.value = [] // 换页时清除选中
 })
 
-// 自动刷新逻辑 (新增持久化)
+// 自动刷新逻辑 (持久化)
 watch(autoRefresh, (newVal) => {
   localStorage.setItem('task_list_auto_refresh', String(newVal))
   if (newVal) {
-    // 立即刷新一次
     refreshTasks(false)
     if (!refreshInterval) {
         refreshInterval = window.setInterval(() => refreshTasks(false), 5000)
@@ -370,16 +349,46 @@ watch(autoRefresh, (newVal) => {
   }
 })
 
-// 刷新任务
+// 核心刷新函数 (对接服务端分页)
 async function refreshTasks(forceLoading = false) {
-  // 自动刷新时不显示全屏 Loading，除非手动点击刷新
   if (forceLoading) loading.value = true
   
   try {
-    await taskStore.fetchTasks(undefined, 1000)
+    await taskStore.fetchTasks({
+      page: currentPage.value,
+      page_size: pageSize,
+      status: filters.value.status || undefined,
+      backend: filters.value.backend || undefined,
+      search: filters.value.search || undefined
+    })
   } finally {
     if (forceLoading) loading.value = false
   }
+}
+
+// 筛选变更
+function applyFilters() {
+  currentPage.value = 1
+  refreshTasks(true)
+}
+
+function clearFilters() {
+  filters.value.status = ''
+  filters.value.backend = ''
+  filters.value.search = ''
+  applyFilters()
+}
+
+// 翻页
+function changePage(page: number) {
+    if (page >= 1 && page <= totalPages.value) {
+        currentPage.value = page
+        refreshTasks(true)
+    }
+}
+
+function copyToClipboard(text: string) {
+  navigator.clipboard.writeText(text)
 }
 
 // 恢复自动刷新状态
@@ -396,22 +405,6 @@ onUnmounted(() => {
   if (refreshInterval) clearInterval(refreshInterval)
 })
 
-// 其他工具函数
-function clearFilters() {
-  filters.value.status = ''
-  filters.value.backend = ''
-  filters.value.search = ''
-  currentPage.value = 1
-}
-
-function copyToClipboard(text: string) {
-  navigator.clipboard.writeText(text)
-}
-
-function applyFilters() {
-  currentPage.value = 1
-}
-
 // 取消任务逻辑
 const showCancelDialog = ref(false)
 const cancelDialogMessage = ref('')
@@ -424,6 +417,8 @@ async function cancelTask(taskId: string) {
 }
 
 async function batchCancel() {
+  // 注意：这里只能批量取消当前页选中的 pending 任务
+  // 实际上用户只能选中当前页的任务，所以逻辑是闭环的
   const pendingTasks = selectedTasks.value.filter(id => {
     const task = tasks.value.find(t => t.task_id === id)
     return task?.status === 'pending'
