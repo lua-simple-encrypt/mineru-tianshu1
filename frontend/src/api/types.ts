@@ -186,7 +186,7 @@ export interface SubmitTaskRequest {
 
   // 兼容旧字段 (即将废弃)
   draw_layout?: boolean 
-  draw_span?: boolean   
+  draw_span?: boolean    
   force_ocr?: boolean    
 
   // Video 专属参数
@@ -221,6 +221,15 @@ export interface Task {
   worker_id: string | null
   retry_count: number
   result_path: string | null
+  source_url?: string | null  // ✅ 新增：源文件下载链接
+  is_parent?: boolean         // ✅ 新增：是否为父任务
+  child_count?: number
+  child_completed?: number
+  subtask_progress?: {        // ✅ 新增：子任务进度
+    total: number
+    completed: number
+    percentage: number
+  }
   data?: {
     markdown_file: string
     content: string
@@ -244,29 +253,8 @@ export interface SubmitTaskResponse {
 }
 
 // 任务状态响应
-export interface TaskStatusResponse {
+export interface TaskStatusResponse extends Task {
   success: boolean
-  task_id: string
-  status: TaskStatus
-  file_name: string
-  backend: Backend
-  priority: number
-  error_message: string | null
-  created_at: string
-  started_at: string | null
-  completed_at: string | null
-  worker_id: string | null
-  retry_count: number
-  data?: {
-    markdown_file: string
-    content: string
-    images_uploaded: boolean
-    has_images: boolean | null
-    json_file?: string
-    json_content?: any
-    json_available?: boolean
-    pdf_path?: string 
-  } | null
   message?: string
 }
 
@@ -287,11 +275,24 @@ export interface QueueStatsResponse {
   timestamp: string
 }
 
+// 任务列表查询参数
+export interface TaskQueryParams {
+  page?: number
+  page_size?: number
+  status?: string
+  backend?: string
+  search?: string
+}
+
 // 任务列表响应
 export interface TaskListResponse {
   success: boolean
-  count: number
+  total: number       // ✅ 新增：总记录数
+  page: number        // ✅ 新增：当前页码
+  page_size: number   // ✅ 新增：每页数量
+  count: number       // 当前页记录数
   tasks: Task[]
+  can_view_all?: boolean
 }
 
 // 通用响应
