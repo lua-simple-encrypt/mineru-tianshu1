@@ -1,5 +1,5 @@
 # Tianshu (天枢) - Production Docker Compose
-# 模式：相对路径挂载 + Paddle自动下载持久化
+# 模式：相对路径挂载 + Paddle自动下载持久化 + 权限修复 + 任务调度
 
 name: tianshu
 
@@ -26,7 +26,7 @@ services:
       - tianshu-network
 
   # ============================================================================
-  # RustFS
+  # RustFS (对象存储)
   # ============================================================================
   rustfs:
     image: rustfs/rustfs:latest
@@ -48,19 +48,18 @@ services:
       - tianshu-network
 
   # ============================================================================
-  # Model Initializer (用于预先下载必要模型)
+  # Model Initializer (模型预下载与配置生成)
   # ============================================================================
   init-models:
     image: tianshu-backend:latest
     container_name: tianshu-init-models
+    # 生成 magic-pdf.json 到 /app/models (宿主机 ./models)，供其他容器复制
     entrypoint: ["python", "download_models.py", "--output", "/app/models"]
     volumes:
-      # 挂载主模型目录
       - ./models:/app/models:rw
-      # 确保初始化脚本也能看到并写入缓存目录
+      # 挂载缓存目录，确保自动下载的模型能持久化
       - ./models/paddlex_cache:/root/.paddlex:rw
       - ./models/paddleocr_cache:/root/.paddleocr:rw
-      # ✅ [已彻底删除 magic-pdf.json 挂载，交由 entrypoint 分发]
       - /etc/localtime:/etc/localtime:ro
     environment:
       - TZ=Asia/Shanghai
@@ -70,7 +69,7 @@ services:
       - tianshu-network
 
   # ============================================================================
-  # Backend API
+  # Backend API (主服务)
   # ============================================================================
   backend:
     build:
@@ -80,6 +79,8 @@ services:
         - tianshu-backend:latest
     image: tianshu-backend:latest
     container_name: tianshu-backend
+    # ✅ [关键修复] 使用 root 运行，解决读取 Worker 生成文件时的 Permission Denied (404错误)
+    user: root
     restart: unless-stopped
     ports:
       - "${API_PORT:-8000}:8000"
@@ -87,7 +88,7 @@ services:
       - ./models:/app/models:rw
       - ./models/paddlex_cache:/root/.paddlex:rw
       - ./models/paddleocr_cache:/root/.paddleocr:rw
-      # ✅ [已彻底删除 magic-pdf.json 挂载，交由 entrypoint 分发]
+      # 数据卷挂载
       - ./input:/app/data/uploads:rw
       - ./output:/app/data/output:rw
       - ./logs/backend:/app/logs:rw
@@ -130,6 +131,32 @@ services:
         condition: service_completed_successfully
 
   # ============================================================================
+  # Task Scheduler (任务调度与清理)
+  # ============================================================================
+  # ✅ [新增服务] 负责重置超时任务和清理旧文件，保障系统长期稳定
+  scheduler:
+    image: tianshu-backend:latest
+    container_name: tianshu-scheduler
+    user: root
+    restart: unless-stopped
+    # 每60秒检查一次，重置超过60分钟未完成的 processing 任务
+    command: ["python", "task_scheduler.py", "--interval", "60", "--stale-task-timeout", "60"]
+    volumes:
+      - ./data/db:/app/data/db:rw
+      - ./output:/app/data/output:rw
+      - ./input:/app/data/uploads:rw
+      - ./logs/scheduler:/app/logs:rw
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    environment:
+      - TZ=Asia/Shanghai
+      - DATABASE_PATH=/app/data/db/mineru_tianshu.db
+    depends_on:
+      - backend
+    networks:
+      - tianshu-network
+
+  # ============================================================================
   # vLLM Service - PaddleOCR
   # ============================================================================
   vllm-paddleocr:
@@ -139,7 +166,9 @@ services:
     ports:
       - "30023:30023"
     volumes:
+      # 只读挂载模型根目录，避免嵌套挂载错误
       - ./models:/models:ro
+      # 挂载 PaddleX 缓存目录到 root 用户目录，供 vLLM 读取
       - ./models/paddlex_cache:/root/.paddlex:ro
       - /etc/localtime:/etc/localtime:ro
     environment:
@@ -209,7 +238,7 @@ services:
         condition: service_completed_successfully
 
   # ============================================================================
-  # Worker
+  # Worker (任务执行者)
   # ============================================================================
   worker:
     image: tianshu-backend:latest
@@ -231,7 +260,6 @@ services:
       - ./models:/app/models:rw
       - ./models/paddlex_cache:/root/.paddlex:rw
       - ./models/paddleocr_cache:/root/.paddleocr:rw
-      # ✅ [已彻底删除 magic-pdf.json 挂载，交由 entrypoint 分发]
       - ./input:/app/data/uploads:rw
       - ./output:/app/data/output:rw
       - ./logs/worker:/app/logs:rw
