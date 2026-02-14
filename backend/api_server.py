@@ -40,6 +40,8 @@ mimetypes.add_type('application/pdf', '.pdf')
 mimetypes.add_type('image/png', '.png')
 mimetypes.add_type('image/jpeg', '.jpg')
 mimetypes.add_type('image/jpeg', '.jpeg')
+mimetypes.add_type('text/markdown', '.md')
+mimetypes.add_type('application/json', '.json')
 
 # 初始化 FastAPI 应用
 app = FastAPI(
