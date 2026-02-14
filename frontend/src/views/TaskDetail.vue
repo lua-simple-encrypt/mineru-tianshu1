@@ -23,14 +23,14 @@
             :class="['px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center', layoutMode === 'single' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700']"
           >
             <FileText class="w-3.5 h-3.5 mr-1.5" />
-            单页
+            {{ $t('task.singlePage') }}
           </button>
           <button
             @click="layoutMode = 'split'"
             :class="['px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center', layoutMode === 'split' ? 'bg-white text-primary-600 shadow-sm' : 'text-gray-500 hover:text-gray-700']"
           >
             <Columns class="w-3.5 h-3.5 mr-1.5" />
-            分屏对比
+            {{ $t('task.splitView') }}
           </button>
         </div>
 
@@ -52,8 +52,8 @@
     <div v-else-if="task" class="flex-1 min-h-0 relative">
       <div v-if="task.status !== 'completed'" class="max-w-3xl mx-auto mt-10 space-y-6 px-4">
          <div class="card p-8 text-center">
-            <h2 class="text-xl font-semibold text-gray-900 mb-2">任务处理中</h2>
-            <p class="text-gray-500">请稍候，解析完成后将自动显示结果...</p>
+            <h2 class="text-xl font-semibold text-gray-900 mb-2">{{ $t('task.taskProcessing') }}</h2>
+            <p class="text-gray-500">{{ $t('task.processingWait') }}</p>
             <div class="mt-6 flex justify-center">
                <LoadingSpinner />
             </div>
@@ -65,8 +65,8 @@
           
           <div v-if="layoutMode === 'split'" class="card p-0 overflow-hidden flex flex-col h-full border-r border-gray-200">
             <div class="bg-gray-50 px-3 py-2 border-b border-gray-200 flex justify-between items-center flex-shrink-0">
-              <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">源文档 / 布局预览</span>
-              <a v-if="pdfUrl" :href="pdfUrl" target="_blank" class="text-xs text-primary-600 hover:underline">新窗口打开</a>
+              <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">{{ $t('task.sourceDocPreview') }}</span>
+              <a v-if="pdfUrl" :href="pdfUrl" target="_blank" class="text-xs text-primary-600 hover:underline">{{ $t('common.openInNewWindow') }}</a>
             </div>
             <div class="flex-1 bg-gray-200 relative">
               <iframe 
@@ -76,7 +76,7 @@
                 frameborder="0"
               ></iframe>
               <div v-else class="absolute inset-0 flex items-center justify-center text-gray-400">
-                暂无预览文件
+                {{ $t('task.noPreview') }}
               </div>
             </div>
           </div>
@@ -84,7 +84,7 @@
           <div class="card p-0 overflow-hidden flex flex-col h-full">
             <div class="bg-gray-50 px-3 py-2 border-b border-gray-200 flex justify-between items-center flex-shrink-0">
               <div class="flex items-center gap-2">
-                 <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider mr-2">解析结果</span>
+                 <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider mr-2">{{ $t('task.parseResult') }}</span>
                  <div class="flex items-center bg-gray-200 rounded p-0.5">
                     <button 
                       @click="switchTab('markdown')" 
@@ -97,14 +97,14 @@
                  </div>
               </div>
               <button @click="downloadMarkdown" class="text-xs text-primary-600 hover:underline flex items-center">
-                <Download class="w-3 h-3 mr-1"/> 下载
+                <Download class="w-3 h-3 mr-1"/> {{ $t('common.download') }}
               </button>
             </div>
             
             <div class="flex-1 overflow-auto bg-white relative custom-scrollbar">
                <div v-show="activeTab === 'markdown'" class="p-6">
                   <MarkdownViewer v-if="task.data?.content" :content="task.data.content" />
-                  <div v-else class="text-center py-10 text-gray-400">无 Markdown 内容</div>
+                  <div v-else class="text-center py-10 text-gray-400">{{ $t('task.noMarkdownContent') }}</div>
                </div>
                <div v-show="activeTab === 'json'" class="p-0 h-full">
                   <JsonViewer 
@@ -112,7 +112,7 @@
                     :data="task.data.json_content" 
                     class="h-full overflow-auto p-4"
                   />
-                  <div v-else class="text-center py-10 text-gray-400">无 JSON 数据</div>
+                  <div v-else class="text-center py-10 text-gray-400">{{ $t('task.noJsonData') }}</div>
                </div>
             </div>
           </div>
@@ -130,7 +130,7 @@ import { useI18n } from 'vue-i18n'
 import { useTaskStore } from '@/stores'
 import {
   ArrowLeft, AlertCircle, RefreshCw, FileText, 
-  Columns, Download, Loader
+  Columns, Download
 } from 'lucide-vue-next'
 import StatusBadge from '@/components/StatusBadge.vue'
 import LoadingSpinner from '@/components/LoadingSpinner.vue'
