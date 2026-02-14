@@ -866,7 +866,8 @@ class MinerUWorkerAPI(ls.LitAPI):
             else:
                 logger.info("✅ MinerU Pipeline engine loaded on CPU")
 
-        # 设置输出目录
+        # 设置输出目录 (任务根目录)
+        # ✅ [关键修复] 直接使用任务根目录作为输出目录，不再依赖 MinerU 生成的深层目录
         output_dir = Path(self.output_dir) / Path(file_path).stem
         output_dir.mkdir(parents=True, exist_ok=True)
         
@@ -884,17 +885,21 @@ class MinerUWorkerAPI(ls.LitAPI):
         # 处理文件
         result = self.mineru_pipeline_engine.parse(file_path, output_path=str(output_dir), options=options)
 
-        # 规范化输出（统一文件名和目录结构）
-        # 注意：result["result_path"] 是实际包含 md 文件的目录（例如 {output_dir}/{file_name}/auto/）
-        # 我们需要在这个result["result_path"] 上运行 normalize_output
+        # ✅ [关键修复] 规范化输出（统一文件名和目录结构）
+        # 将深层嵌套（result_path）中的文件移动到 task root (output_dir)，实现扁平化
+        # MinerU 原始输出类似: task_id/filename/auto/result.md
+        # 规范化后变为: task_id/result.md
+        # 注意：result["result_path"] 是 MinerU 生成的实际包含 md 文件的深层目录
         actual_output_dir = Path(result["result_path"])
-        normalize_output(actual_output_dir)
+        
+        # 将 output_dir 作为目标目录传入，让 normalize_output 将文件移动到这里
+        normalize_output(actual_output_dir, target_dir=output_dir)
 
         # MinerU Pipeline 返回结构：
         return {
-            "result_path": result["result_path"],
+            "result_path": str(output_dir), # ✅ 返回扁平化后的根目录
             "content": result["markdown"],
-            "json_path": result.get("json_path"),
+            "json_path": str(output_dir / "result.json") if result.get("json_content") else None,
             "json_content": result.get("json_content"),
         }
 
