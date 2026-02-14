@@ -124,8 +124,11 @@ services:
     networks:
       - tianshu-network
     depends_on:
-      - rustfs
-      - init-models
+      # ✅ [核心修改] 将列表语法改为字典语法，强制等待 init-models 执行完毕
+      rustfs:
+        condition: service_started
+      init-models:
+        condition: service_completed_successfully
 
   # ============================================================================
   # vLLM Service - PaddleOCR
@@ -205,7 +208,6 @@ services:
               capabilities: [gpu]
     networks:
       - tianshu-network
-    # 如果你也经常手动启动 vllm-mineru 且 MinerU2.5 模型也是用 init-models 下载，建议也加上依赖：
     depends_on:
       init-models:
         condition: service_completed_successfully
@@ -285,9 +287,13 @@ services:
     networks:
       - tianshu-network
     depends_on:
-      - rustfs
-      - backend
-      - init-models
+      # ✅ [核心修改] 将列表语法改为字典语法，强制等待 backend 启动且 init-models 执行完毕
+      rustfs:
+        condition: service_started
+      backend:
+        condition: service_started
+      init-models:
+        condition: service_completed_successfully
 
   # ============================================================================
   # MCP Server
