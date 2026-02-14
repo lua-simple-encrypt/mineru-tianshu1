@@ -8,10 +8,10 @@
       <button 
         @click="resetConfig" 
         class="text-xs text-gray-500 hover:text-primary-600 underline transition-colors flex items-center"
-        title="恢复默认设置"
+        :title="$t('task.resetConfig')"
       >
         <RotateCcw class="w-3 h-3 mr-1" />
-        {{ $t('common.reset') || '重置配置' }}
+        {{ $t('common.reset') }}
       </button>
     </div>
 
@@ -45,7 +45,7 @@
                 {{ submitting ? $t('common.loading') : `${$t('task.submitTask')} (${files.length})` }}
               </button>
               <p v-if="files.length === 0" class="text-center text-xs text-gray-400 mt-2">
-                请先选择文件
+                {{ $t('task.pleaseSelectFile') }}
               </p>
             </div>
           </div>
@@ -144,16 +144,16 @@
 
             <div v-if="isMinerUBackend" class="pt-4 border-t border-gray-100">
               <h3 class="text-sm font-bold text-gray-800 mb-3 flex items-center">
-                <ScanText class="w-4 h-4 mr-2 text-primary-600"/> 识别与解析控制
+                <ScanText class="w-4 h-4 mr-2 text-primary-600"/> {{ $t('task.recognitionControl') }}
               </h3>
               
               <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div class="border border-gray-200 rounded-lg p-3 hover:bg-gray-50 transition-colors">
                   <label class="flex items-center cursor-pointer mb-1">
                     <input v-model="config.table_enable" type="checkbox" class="w-4 h-4 text-primary-600 rounded border-gray-300 focus:ring-primary-500" />
-                    <span class="ml-2 text-sm font-medium text-gray-900">启用表格识别</span>
+                    <span class="ml-2 text-sm font-medium text-gray-900">{{ $t('task.enableTableRecognition') }}</span>
                   </label>
-                  <p class="text-xs text-gray-500 pl-6">禁用后，表格将显示为图片。</p>
+                  <p class="text-xs text-gray-500 pl-6">{{ $t('task.tableRecognitionDisabledHint') }}</p>
                 </div>
 
                 <div class="border border-gray-200 rounded-lg p-3 hover:bg-gray-50 transition-colors">
@@ -161,15 +161,15 @@
                     <input v-model="config.formula_enable" type="checkbox" class="w-4 h-4 text-primary-600 rounded border-gray-300 focus:ring-primary-500" />
                     <span class="ml-2 text-sm font-medium text-gray-900">{{ formulaLabel }}</span>
                   </label>
-                  <p class="text-xs text-gray-500 pl-6">禁用后，{{ formulaDescription }}</p>
+                  <p class="text-xs text-gray-500 pl-6">{{ formulaDescription }}</p>
                 </div>
 
                 <div v-if="config.backend !== 'vlm-auto-engine'" class="border border-gray-200 rounded-lg p-3 hover:bg-gray-50 transition-colors md:col-span-2" :class="{'bg-orange-50 border-orange-200': config.force_ocr}">
                   <label class="flex items-center cursor-pointer mb-1">
                     <input v-model="config.force_ocr" type="checkbox" class="w-4 h-4 text-orange-500 rounded border-gray-300 focus:ring-orange-500" />
-                    <span class="ml-2 text-sm font-medium text-gray-900">强制启用 OCR <span v-if="config.force_ocr" class="text-orange-600 text-xs ml-2">(已启用)</span></span>
+                    <span class="ml-2 text-sm font-medium text-gray-900">{{ $t('task.forceOCR') }} <span v-if="config.force_ocr" class="text-orange-600 text-xs ml-2">{{ $t('task.forceOCRStatus') }}</span></span>
                   </label>
-                  <p class="text-xs text-gray-500 pl-6">仅在识别效果极差（如模糊扫描件）时启用，需选择正确的 OCR 语言。</p>
+                  <p class="text-xs text-gray-500 pl-6">{{ $t('task.forceOCRHint') }}</p>
                 </div>
               </div>
             </div>
@@ -178,14 +178,14 @@
               <button @click="showAdvanced = !showAdvanced" class="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-100 transition-colors rounded-lg group">
                 <div class="flex items-center text-sm font-medium text-gray-700">
                   <Sliders class="w-4 h-4 mr-2 text-gray-500 group-hover:text-primary-600" />
-                  高级配置 <span class="ml-2 text-xs text-gray-400 font-normal">(页码、去水印、Office转换、调试)</span>
+                  {{ $t('task.advancedSettings') }} <span class="ml-2 text-xs text-gray-400 font-normal">{{ $t('task.advancedSettingsHint') }}</span>
                 </div>
                 <component :is="showAdvanced ? ChevronUp : ChevronDown" class="w-4 h-4 text-gray-400" />
               </button>
 
               <div v-show="showAdvanced" class="px-4 pb-4 pt-2 space-y-5 animate-fade-in-down">
                 <div v-if="isMinerUBackend">
-                  <label class="block text-xs font-bold text-gray-600 uppercase tracking-wide mb-2">解析范围 (Page Range)</label>
+                  <label class="block text-xs font-bold text-gray-600 uppercase tracking-wide mb-2">{{ $t('task.pageRange') }}</label>
                   <div class="flex items-center space-x-3 bg-white p-3 rounded border border-gray-200">
                     <div class="flex items-center space-x-2 flex-1">
                       <span class="text-xs text-gray-500">Start:</span>
@@ -197,20 +197,20 @@
                       <input v-model.number="config.end_page" type="number" min="0" class="form-input-sm w-full" placeholder="Auto" />
                     </div>
                   </div>
-                  <p class="mt-1 text-[10px] text-gray-400">留空或 -1 表示处理到文件末尾。起始页从 0 开始。</p>
+                  <p class="mt-1 text-[10px] text-gray-400">{{ $t('task.pageRangeHint') }}</p>
                 </div>
 
                 <div v-if="['pipeline', 'paddleocr-vl', 'paddleocr-vl-vllm', 'auto'].includes(config.backend)">
-                   <label class="block text-xs font-bold text-gray-600 uppercase tracking-wide mb-2">预处理增强</label>
+                   <label class="block text-xs font-bold text-gray-600 uppercase tracking-wide mb-2">{{ $t('task.preprocessing') }}</label>
                    <div class="grid grid-cols-1 gap-3">
                       <div class="border border-gray-200 rounded p-3 bg-white">
                         <label class="flex items-center cursor-pointer mb-2">
                           <input v-model="config.remove_watermark" type="checkbox" class="form-checkbox text-purple-600 rounded border-gray-300 h-4 w-4" />
-                          <span class="ml-2 text-sm font-medium text-gray-800">启用去水印 (Watermark Removal)</span>
+                          <span class="ml-2 text-sm font-medium text-gray-800">{{ $t('task.enableWatermarkRemoval') }}</span>
                         </label>
                         <div v-if="config.remove_watermark" class="pl-6 pt-1 space-y-2 animate-fade-in">
                            <div class="flex items-center justify-between text-xs text-gray-500">
-                             <span>检测置信度: <span class="font-mono text-purple-600">{{ config.watermark_conf_threshold }}</span></span>
+                             <span>{{ $t('task.watermarkConfidence') }}: <span class="font-mono text-purple-600">{{ config.watermark_conf_threshold }}</span></span>
                            </div>
                            <input v-model.number="config.watermark_conf_threshold" type="range" min="0.1" max="0.9" step="0.05" class="w-full h-1.5 bg-gray-100 rounded-lg appearance-none cursor-pointer accent-purple-600" />
                         </div>
@@ -219,39 +219,39 @@
                       <div v-if="['auto', 'pipeline'].includes(config.backend)" class="border border-gray-200 rounded p-3 bg-white">
                          <label class="flex items-center cursor-pointer">
                           <input v-model="config.convert_office_to_pdf" type="checkbox" class="form-checkbox text-primary-600 rounded border-gray-300 h-4 w-4" />
-                          <span class="ml-2 text-sm font-medium text-gray-800">Office 转 PDF 深度解析</span>
+                          <span class="ml-2 text-sm font-medium text-gray-800">{{ $t('task.officeToPdf') }}</span>
                         </label>
                         <p class="pl-6 mt-1 text-xs text-gray-500">
-                          推荐启用。先转换为 PDF 后再解析，可完整提取 Word/PPT 中的复杂图表和排版。
+                          {{ $t('task.officeToPdfHint') }}
                         </p>
                       </div>
                    </div>
                 </div>
 
                 <div v-if="config.backend === 'video' || config.backend === 'sensevoice'">
-                   <label class="block text-xs font-bold text-blue-600 uppercase tracking-wide mb-2">媒体处理参数</label>
+                   <label class="block text-xs font-bold text-blue-600 uppercase tracking-wide mb-2">{{ $t('task.mediaParams') }}</label>
                    <div class="bg-blue-50 border border-blue-100 rounded p-3 space-y-2">
                       <div v-if="config.backend === 'video'">
-                         <label class="flex items-center cursor-pointer"><input v-model="config.keep_audio" type="checkbox" class="mr-2 rounded text-blue-600"/> <span class="text-sm">保留音频轨道文件</span></label>
-                         <label class="flex items-center cursor-pointer mt-2"><input v-model="config.enable_keyframe_ocr" type="checkbox" class="mr-2 rounded text-blue-600"/> <span class="text-sm">启用关键帧 OCR 内容识别</span></label>
+                         <label class="flex items-center cursor-pointer"><input v-model="config.keep_audio" type="checkbox" class="mr-2 rounded text-blue-600"/> <span class="text-sm">{{ $t('task.keepAudioFile') }}</span></label>
+                         <label class="flex items-center cursor-pointer mt-2"><input v-model="config.enable_keyframe_ocr" type="checkbox" class="mr-2 rounded text-blue-600"/> <span class="text-sm">{{ $t('task.enableKeyframeOCR') }}</span></label>
                       </div>
                       <div v-if="config.backend === 'sensevoice'">
-                         <label class="flex items-center cursor-pointer"><input v-model="config.enable_speaker_diarization" type="checkbox" class="mr-2 rounded text-blue-600"/> <span class="text-sm">启用说话人分离 (Speaker Diarization)</span></label>
+                         <label class="flex items-center cursor-pointer"><input v-model="config.enable_speaker_diarization" type="checkbox" class="mr-2 rounded text-blue-600"/> <span class="text-sm">{{ $t('task.enableSpeakerDiarization') }}</span></label>
                       </div>
                    </div>
                 </div>
 
                 <div v-if="isMinerUBackend">
                   <div class="pt-2 border-t border-dashed border-gray-200 mt-2">
-                    <label class="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">DEBUG OUTPUT</label>
+                    <label class="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">{{ $t('task.debugOutput') }}</label>
                     <div class="flex space-x-6">
                        <label class="flex items-center cursor-pointer text-xs text-gray-500 hover:text-gray-700">
                           <input v-model="config.draw_layout" type="checkbox" class="mr-1.5 rounded border-gray-300" />
-                          生成 Layout 标注 PDF
+                          {{ $t('task.generateLayoutPDF') }}
                        </label>
                        <label class="flex items-center cursor-pointer text-xs text-gray-500 hover:text-gray-700">
                           <input v-model="config.draw_span" type="checkbox" class="mr-1.5 rounded border-gray-300" />
-                          生成 Span 标注 PDF
+                          {{ $t('task.generateSpanPDF') }}
                        </label>
                     </div>
                   </div>
@@ -277,7 +277,7 @@
         <div v-if="submitProgress.length > 0" class="mt-6 card overflow-hidden animate-fade-in shadow-sm">
           <div class="bg-gray-50 px-4 py-3 border-b border-gray-100 flex justify-between items-center">
             <h3 class="text-sm font-semibold text-gray-900">{{ $t('common.progress') }}</h3>
-            <span class="text-xs text-gray-500">{{ submitProgress.filter(p => p.success).length }} / {{ submitProgress.length }} 完成</span>
+            <span class="text-xs text-gray-500">{{ submitProgress.filter(p => p.success).length }} / {{ submitProgress.length }} {{ $t('task.completedCount') }}</span>
           </div>
           <div class="max-h-60 overflow-y-auto divide-y divide-gray-100 custom-scrollbar">
             <div
@@ -303,10 +303,10 @@
           
           <div v-if="!submitting" class="p-3 bg-gray-50 border-t border-gray-100 flex justify-end space-x-3">
             <button @click="resetForm" class="btn btn-secondary btn-sm text-xs">
-              {{ $t('common.continue') }} (清空)
+              {{ $t('common.continue') }} {{ $t('task.continueClear') }}
             </button>
             <router-link to="/tasks" class="btn btn-primary btn-sm text-xs flex items-center">
-              查看任务列表 <ArrowRight class="w-3 h-3 ml-1"/>
+              {{ $t('task.viewTaskList') }} <ArrowRight class="w-3 h-3 ml-1"/>
             </router-link>
           </div>
         </div>
@@ -325,7 +325,7 @@ import FileUploader from '@/components/FileUploader.vue'
 import {
   Upload, Loader, AlertCircle, X, FileText, CheckCircle, XCircle,
   Settings, ChevronDown, ChevronUp, Info, RotateCcw, ArrowRight,
-  ScanText, Send, Sliders, Wand
+  ScanText, Send, Sliders
 } from 'lucide-vue-next'
 import type { Backend, Language, ParseMethod } from '@/api/types'
 
@@ -343,13 +343,13 @@ const currentPreset = ref('default')
 interface SubmitProgress { fileName: string; success: boolean; error: boolean; taskId?: string; errorMsg?: string }
 const submitProgress = ref<SubmitProgress[]>([])
 
-// 预设配置
-const presets = [
-  { id: 'default', name: '通用文档', desc: '标准 Pipeline，速度快', icon: '📄', config: { backend: 'pipeline', force_ocr: false, formula_enable: true, table_enable: true } },
-  { id: 'academic', name: '学术论文', desc: 'Hybrid 模式，公式增强', icon: '🎓', config: { backend: 'hybrid-auto-engine', force_ocr: false, formula_enable: true, table_enable: true } },
-  { id: 'scanned', name: '扫描件', desc: 'Hybrid + 强制 OCR', icon: '🖨️', config: { backend: 'hybrid-auto-engine', force_ocr: true, formula_enable: false, table_enable: true } },
-  { id: 'complex', name: '复杂图表', desc: 'VLM 视觉模型', icon: '📊', config: { backend: 'vlm-auto-engine', force_ocr: false, formula_enable: true, table_enable: true } },
-]
+// 预设配置 (使用 computed 以响应语言变化)
+const presets = computed(() => [
+  { id: 'default', name: t('task.presetGeneral'), desc: t('task.presetGeneralDesc'), icon: '📄', config: { backend: 'pipeline', force_ocr: false, formula_enable: true, table_enable: true } },
+  { id: 'academic', name: t('task.presetAcademic'), desc: t('task.presetAcademicDesc'), icon: '🎓', config: { backend: 'hybrid-auto-engine', force_ocr: false, formula_enable: true, table_enable: true } },
+  { id: 'scanned', name: t('task.presetScanned'), desc: t('task.presetScannedDesc'), icon: '🖨️', config: { backend: 'hybrid-auto-engine', force_ocr: true, formula_enable: false, table_enable: true } },
+  { id: 'complex', name: t('task.presetComplex'), desc: t('task.presetComplexDesc'), icon: '📊', config: { backend: 'vlm-auto-engine', force_ocr: false, formula_enable: true, table_enable: true } },
+])
 
 const defaultConfig = {
   backend: 'auto' as Backend,
@@ -393,25 +393,20 @@ const currentBackendHint = computed(() => {
   const map: Record<string, string> = {
     'auto': t('task.backendAutoHint'),
     'pipeline': t('task.backendPipelineHint'),
-    'vlm-auto-engine': t('task.backendVlmAutoEngineHint'),
-    'hybrid-auto-engine': t('task.backendHybridAutoEngineHint'),
-    'paddleocr-vl': t('task.backendPaddleOcrVl09bHint'), // 修正key名
+    'vlm-auto-engine': t('task.backendVLMAutoHint'),
+    'hybrid-auto-engine': t('task.backendHybridAutoHint'),
+    'paddleocr-vl': t('task.backendPaddleOcrVl09bHint'), 
     'paddleocr-vl-vllm': t('task.backendPaddleOCRVLLMHint'),
     'sensevoice': t('task.backendSenseVoiceHint'),
-    'video': '视频处理：提取关键帧并识别文字，同时分离音频进行语音识别。',
-    'fasta': 'FASTA: 解析生物序列文件。',
-    'genbank': 'GenBank: 解析基因序列注释文件。'
+    'video': t('task.backendVideoHint'),
+    'fasta': t('task.backendFastaHint'),
+    'genbank': t('task.backendGenBankHint')
   }
   return map[config.backend] || ''
 })
 
-const backendDescription = computed(() => {
-  // 这里其实不需要了，因为被 currentBackendHint 取代了，或者可以保留作为 select 下方的通用说明
-  return currentBackendHint.value;
-})
-
-const formulaLabel = computed(() => config.backend === 'vlm-auto-engine' ? '启用行间公式识别' : (config.backend === 'hybrid-auto-engine' ? '启用行内公式识别' : '启用公式识别'))
-const formulaDescription = computed(() => config.backend === 'vlm-auto-engine' ? '行间公式将显示为图片' : (config.backend === 'hybrid-auto-engine' ? '行内公式将不会被检测或解析' : '公式将不会被特殊处理'))
+const formulaLabel = computed(() => config.backend === 'vlm-auto-engine' ? t('task.enableFormulaInterline') : (config.backend === 'hybrid-auto-engine' ? t('task.enableFormulaInline') : t('task.enableFormulaRecognition')))
+const formulaDescription = computed(() => config.backend === 'vlm-auto-engine' ? t('task.formulaDisabledHintInterline') : (config.backend === 'hybrid-auto-engine' ? t('task.formulaDisabledHintInline') : t('task.formulaDisabledHintNormal')))
 
 // 动态语言列表
 const availableLanguages = computed(() => {
@@ -476,8 +471,7 @@ function resetConfig() { Object.assign(config, defaultConfig); localStorage.remo
 function resetForm() {
     files.value = [];
     if (fileUploader.value) {
-        // 假设 FileUploader 组件有 reset 方法，如果没有则需要实现或通过 ref 操作
-        // (fileUploader.value as any).files = []; 
+        // fileUploader.value.clear(); // 如果 FileUploader 有 clear 方法
     }
     submitProgress.value = [];
     submitting.value = false;
@@ -490,7 +484,7 @@ async function submitTasks() {
   // 参数校验
   if (config.start_page !== undefined && config.end_page !== undefined && config.end_page !== -1) {
     if (config.end_page < config.start_page) {
-      errorMessage.value = "结束页码不能小于开始页码"
+      errorMessage.value = t('task.pageError')
       showAdvanced.value = true
       return
     }
