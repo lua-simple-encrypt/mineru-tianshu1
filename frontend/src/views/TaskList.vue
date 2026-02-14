@@ -67,8 +67,8 @@
                 <option value="hybrid-auto-engine">Hybrid (High Prec.)</option>
               </optgroup>
               <optgroup :label="$t('task.groupPaddleOCR')">
-                <option value="paddleocr-vl">PaddleOCR-VL</option>
-                <option value="paddleocr-vl-vllm">PaddleOCR-VL-VLLM</option>
+                <option value="paddleocr-vl">PaddleOCR-VL v1.5 (0.9B)</option>
+                <option value="paddleocr-vl-vllm">PaddleOCR-VL v1.5 (0.9B) (vLLM)</option>
               </optgroup>
               <optgroup :label="$t('task.groupAudioVideo')">
                 <option value="sensevoice">SenseVoice (Audio)</option>
