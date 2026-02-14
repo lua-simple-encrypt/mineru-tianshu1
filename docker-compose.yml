@@ -79,7 +79,7 @@ services:
         - tianshu-backend:latest
     image: tianshu-backend:latest
     container_name: tianshu-backend
-    # ✅ [关键修复] 使用 root 运行，解决读取 Worker 生成文件时的 Permission Denied (404错误)
+    # ✅ [关键配置] 使用 root 运行，解决读取 Worker 生成文件时的 Permission Denied (404错误)
     user: root
     restart: unless-stopped
     ports:
@@ -151,6 +151,8 @@ services:
     environment:
       - TZ=Asia/Shanghai
       - DATABASE_PATH=/app/data/db/mineru_tianshu.db
+      # ✅ [关键修复] 添加 JWT_SECRET_KEY 防止服务崩溃重启
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
     depends_on:
       - backend
     networks:
