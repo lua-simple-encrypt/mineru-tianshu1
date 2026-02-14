@@ -622,14 +622,14 @@ async def get_queue_stats(current_user: User = Depends(require_permission(Permis
     }
 
 
-# ✅ [核心重构] 实现真分页、搜索和筛选
 @app.get("/api/v1/queue/tasks", tags=["队列管理"])
 async def list_tasks(
     status: Optional[str] = Query(None, description="筛选状态: pending/processing/completed/failed"),
-    backend: Optional[str] = Query(None, description="筛选后端引擎"),
-    search: Optional[str] = Query(None, description="搜索文件名或任务ID"),
-    page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    limit: int = Query(100, description="返回数量限制", le=1000),
+    page: int = Query(1, ge=1, description="页码"),  # ✅ [新增] 支持分页
+    page_size: int = Query(20, ge=1, le=100, description="每页数量"), # ✅ [新增] 支持分页
+    backend: Optional[str] = Query(None, description="筛选后端引擎"), # ✅ [新增] 支持筛选后端
+    search: Optional[str] = Query(None, description="搜索文件名或任务ID"), # ✅ [新增] 支持搜索
     current_user: User = Depends(get_current_active_user),
 ):
     """
@@ -816,7 +816,7 @@ async def list_engines():
         engines["ocr"].append(
             {
                 "name": "paddleocr-vl-vllm",
-                "display_name": "PaddleOCR-VL v1.5 (vLLM)", # ✅ 优化显示名称
+                "display_name": "PaddleOCR-VL v1.5 (0.9B) (vLLM)", # ✅ 优化显示名称，加上 0.9B
                 "description": "基于 vLLM 的高性能 PaddleOCR-VL v1.5 (0.9B) 引擎",
                 "supported_formats": [".pdf", ".png", ".jpg", ".jpeg"],
             }
