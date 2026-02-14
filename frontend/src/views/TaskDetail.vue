@@ -43,6 +43,7 @@
     <div v-if="loading && !task" class="flex-1 flex items-center justify-center">
       <LoadingSpinner size="lg" :text="$t('common.loading')" />
     </div>
+    
     <div v-else-if="error" class="card bg-red-50 border-red-200 mx-1">
       <div class="flex items-center text-red-800">
         <AlertCircle class="w-6 h-6 mr-3" /> {{ error }}
@@ -50,12 +51,32 @@
     </div>
 
     <div v-else-if="task" class="flex-1 min-h-0 relative">
-      <div v-if="task.status !== 'completed'" class="max-w-3xl mx-auto mt-10 space-y-6 px-4">
+      
+      <div v-if="['pending', 'processing'].includes(task.status)" class="max-w-3xl mx-auto mt-10 space-y-6 px-4">
          <div class="card p-8 text-center">
             <h2 class="text-xl font-semibold text-gray-900 mb-2">{{ $t('task.taskProcessing') }}</h2>
             <p class="text-gray-500">{{ $t('task.processingWait') }}</p>
             <div class="mt-6 flex justify-center">
                <LoadingSpinner />
+            </div>
+         </div>
+      </div>
+
+      <div v-else-if="['failed', 'cancelled'].includes(task.status)" class="max-w-3xl mx-auto mt-10 space-y-6 px-4">
+         <div class="card p-8 text-center border-red-100 bg-red-50">
+            <div class="flex justify-center mb-4">
+               <AlertCircle class="w-12 h-12 text-red-500" />
+            </div>
+            <h2 class="text-xl font-semibold text-red-700 mb-2">
+               {{ task.status === 'failed' ? $t('status.failed') : $t('status.cancelled') }}
+            </h2>
+            <div class="text-red-600 bg-white p-4 rounded border border-red-200 font-mono text-sm text-left overflow-auto max-h-64 break-all">
+               {{ task.error_message || 'Unknown error occurred' }}
+            </div>
+            <div class="mt-6" v-if="pdfUrl">
+               <a :href="pdfUrl" target="_blank" class="btn btn-secondary btn-sm inline-flex items-center">
+                 <FileText class="w-4 h-4 mr-2"/> {{ $t('task.sourceDocPreview') }}
+               </a>
             </div>
          </div>
       </div>
@@ -152,13 +173,15 @@ const layoutMode = ref<'single' | 'split'>('split') // 默认开启分屏
 // 计算 PDF 的 URL
 const pdfUrl = computed(() => {
   // 1. 优先显示后端生成的预览 PDF (如 _layout.pdf)
+  // 这是 MinerU 生成的带有布局框的 PDF，用于对照查看
   if (task.value?.data?.pdf_path) {
     // 必须对路径进行编码，处理中文文件名
     const encodedPath = encodeURIComponent(task.value.data.pdf_path)
     return `/api/v1/files/output/${encodedPath}`
   }
   
-  // 2. 如果没有生成文件（或还在处理中），回退显示上传的源文件
+  // 2. 回退显示源文件 (修复 Bug：之前如果任务未完成或无 layout pdf，这里会返回 null)
+  // source_url 是上传文件的直接访问地址
   if (task.value?.source_url) {
     return task.value.source_url
   }
@@ -201,7 +224,8 @@ onMounted(async () => {
   // 自动轮询
   if (task.value && ['pending', 'processing'].includes(task.value.status)) {
     stopPolling = taskStore.pollTaskStatus(taskId.value, 2000, async (updatedTask) => {
-      if (['completed', 'failed'].includes(updatedTask.status)) {
+      // 只有在变成完成或失败/取消时才停止轮询
+      if (['completed', 'failed', 'cancelled'].includes(updatedTask.status)) {
         if (stopPolling) stopPolling()
       }
     })
