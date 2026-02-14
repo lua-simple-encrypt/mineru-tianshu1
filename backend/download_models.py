@@ -423,7 +423,7 @@ def main(output_dir, selected_models=None, force=False):
                 mid = config.get("model_id") or config.get("repo_id")
                 path = download_from_modelscope(mid, str(target))
 
-            # 验证
+            # ✅ 核心优化：容错处理
             if path and verify_model_files(path, name):
                 size_mb = get_directory_size(path)
                 manifest["models"][name] = {"status": "downloaded", "path": str(path)}
@@ -432,11 +432,17 @@ def main(output_dir, selected_models=None, force=False):
                 total_dl += 1
             else:
                 logger.error(f"   ❌ Validation failed for {name}")
-                total_fail += 1
+                if config.get("required", False):
+                    total_fail += 1
+                else:
+                    logger.warning(f"   ⚠️ [IGNORED] Optional model {name} failed, but not required. Skipping...")
 
         except Exception as e:
             logger.error(f"   ❌ Error: {e}")
-            total_fail += 1
+            if config.get("required", False):
+                total_fail += 1
+            else:
+                logger.warning(f"   ⚠️ [IGNORED] Optional model {name} failed, but not required. Skipping...")
         logger.info("")
 
     generate_magic_pdf_json(output_path)
@@ -446,6 +452,8 @@ def main(output_dir, selected_models=None, force=False):
 
     logger.info("=" * 60)
     logger.info(f"✅ Downloaded: {total_dl} | ⏭️  Skipped: {total_skip} | ❌ Failed: {total_fail}")
+    
+    # 只要必填项没有失败，脚本即以 0 状态退出，确保后续服务(如 vllm)能够启动
     return 0 if total_fail == 0 else 1
 
 if __name__ == "__main__":
