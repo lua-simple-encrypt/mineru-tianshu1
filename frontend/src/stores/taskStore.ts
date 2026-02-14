@@ -46,7 +46,7 @@ export const useTaskStore = defineStore('task', () => {
         task_id: response.task_id,
         file_name: response.file_name,
         status: response.status,
-        backend: request.backend || 'pipeline',
+        backend: request.backend || 'pipeline', // 默认值回退
         priority: request.priority || 0,
         error_message: null,
         created_at: response.created_at,
@@ -75,12 +75,19 @@ export const useTaskStore = defineStore('task', () => {
     uploadImages: boolean = false,
     format: 'markdown' | 'json' | 'both' = 'markdown'
   ) {
-    loading.value = true
+    // 只有当当前没有显示该任务，或者强制刷新时才显示 loading
+    // 避免轮询时界面闪烁
+    if (!currentTask.value || currentTask.value.task_id !== taskId) {
+        loading.value = true
+    }
+    
     error.value = null
 
     try {
       const response = await taskApi.getTaskStatus(taskId, uploadImages, format)
-      currentTask.value = {
+      
+      // 构建完整的 Task 对象
+      const updatedTask: Task = {
         task_id: response.task_id,
         file_name: response.file_name,
         status: response.status,
@@ -92,14 +99,23 @@ export const useTaskStore = defineStore('task', () => {
         completed_at: response.completed_at,
         worker_id: response.worker_id,
         retry_count: response.retry_count,
-        result_path: null,
-        data: response.data,
+        result_path: null, // API 响应中通常没有这个字段，或者叫 result_dir
+        data: response.data, // 这里包含了 content, json_content, pdf_path 等
       }
 
-      // 更新任务列表中的任务
+      currentTask.value = updatedTask
+
+      // 更新任务列表中的任务状态，保持列表数据同步
       const index = tasks.value.findIndex(t => t.task_id === taskId)
       if (index !== -1) {
-        tasks.value[index] = currentTask.value
+        // 只更新状态和时间信息，避免列表页重绘太重
+        tasks.value[index] = {
+            ...tasks.value[index],
+            status: updatedTask.status,
+            completed_at: updatedTask.completed_at,
+            started_at: updatedTask.started_at,
+            error_message: updatedTask.error_message
+        }
       }
 
       return response
@@ -173,14 +189,16 @@ export const useTaskStore = defineStore('task', () => {
       if (stopped) return
 
       try {
-        const response = await fetchTaskStatus(taskId, false, format)
-
-        if (onUpdate && currentTask.value) {
-          onUpdate(currentTask.value)
+        // 调用 fetchTaskStatus 更新 store
+        await fetchTaskStatus(taskId, false, format)
+        
+        if (currentTask.value && onUpdate) {
+            onUpdate(currentTask.value)
         }
 
+        const status = currentTask.value?.status
         // 如果任务完成或失败，停止轮询
-        if (response.status === 'completed' || response.status === 'failed' || response.status === 'cancelled') {
+        if (status === 'completed' || status === 'failed' || status === 'cancelled') {
           stopped = true
           return
         }
@@ -191,7 +209,8 @@ export const useTaskStore = defineStore('task', () => {
         }
       } catch (err) {
         console.error('轮询任务状态失败:', err)
-        // 发生错误时也停止轮询
+        // 发生错误时可以选择继续重试几次，或者停止
+        // 这里选择停止以防止无限错误循环
         stopped = true
       }
     }
