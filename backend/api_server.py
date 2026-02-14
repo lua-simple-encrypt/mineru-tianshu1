@@ -332,9 +332,9 @@ async def submit_task(
         )
 
         logger.info(f"✅ Task submitted: {task_id} - {file.filename}")
-        logger.info(f"   User: {current_user.username} ({current_user.role.value})")
-        logger.info(f"   Backend: {backend}")
-        logger.info(f"   Priority: {priority}")
+        logger.info(f"    User: {current_user.username} ({current_user.role.value})")
+        logger.info(f"    Backend: {backend}")
+        logger.info(f"    Priority: {priority}")
 
         return {
             "success": True,
@@ -902,19 +902,28 @@ async def health_check():
 async def serve_output_file(file_path: str):
     """提供输出文件的访问服务"""
     try:
-        logger.debug(f"📥 Received output file request: {file_path}")
-        decoded_path = unquote(file_path)
+        # ✅ [核心修复] 解码并移除开头的斜杠，防止 double slash 或 encoding 问题
+        decoded_path = unquote(file_path).lstrip("/")
+        
+        # 拼接完整路径
         full_path = (OUTPUT_DIR / decoded_path).resolve()
+        
+        logger.debug(f"📥 Serving output file: {full_path}")
 
-        # ✅ [安全修复] 必须使用 pathlib 的 is_relative_to 防止跨平台路径穿越
+        # ✅ [安全修复] 防止目录穿越
         if not full_path.is_relative_to(OUTPUT_DIR.resolve()) or not full_path.is_file():
+            logger.warning(f"❌ Access denied or file not found: {full_path}")
             raise HTTPException(status_code=404, detail="File not found or access denied")
 
+        # 自动猜测 MIME 类型
         media_type, _ = mimetypes.guess_type(full_path)
-        return FileResponse(path=str(full_path), media_type=media_type or "application/octet-stream", filename=full_path.name)
+        return FileResponse(
+            path=str(full_path), 
+            media_type=media_type or "application/octet-stream", 
+            filename=full_path.name
+        )
         
     except HTTPException:
-        # 允许 404/403 正常抛出，不要被拦截成 500
         raise
     except Exception as e:
         logger.error(f"❌ Error serving output file: {e}")
@@ -925,16 +934,26 @@ async def serve_output_file(file_path: str):
 async def serve_upload_file(file_path: str):
     """提供上传源文件的访问服务"""
     try:
-        logger.debug(f"📥 Received input file request: {file_path}")
-        decoded_path = unquote(file_path)
+        # ✅ [核心修复] 解码并移除开头的斜杠
+        decoded_path = unquote(file_path).lstrip("/")
+        
+        # 拼接完整路径
         full_path = (UPLOAD_DIR / decoded_path).resolve()
+        
+        logger.debug(f"📥 Serving upload file: {full_path}")
 
-        # ✅ [安全修复] 使用 pathlib 的 is_relative_to 防范目录穿越
+        # ✅ [安全修复] 防止目录穿越
         if not full_path.is_relative_to(UPLOAD_DIR.resolve()) or not full_path.is_file():
+            logger.warning(f"❌ Access denied or file not found: {full_path}")
             raise HTTPException(status_code=404, detail="File not found or access denied")
 
+        # 自动猜测 MIME 类型
         media_type, _ = mimetypes.guess_type(full_path)
-        return FileResponse(path=str(full_path), media_type=media_type or "application/octet-stream", filename=full_path.name)
+        return FileResponse(
+            path=str(full_path), 
+            media_type=media_type or "application/octet-stream", 
+            filename=full_path.name
+        )
         
     except HTTPException:
         raise
