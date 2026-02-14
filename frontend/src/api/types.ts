@@ -96,8 +96,8 @@ export type Backend =
   | 'hybrid-auto-engine'// MinerU 混合高精度 (本地)
   | 'vlm-http-client'   // [新增] MinerU VLM Client (远程)
   | 'hybrid-http-client'// [新增] MinerU Hybrid Client (远程)
-  | 'paddleocr-vl'
-  | 'paddleocr-vl-vllm'
+  | 'paddleocr-vl'      // PaddleOCR-VL v1.5 (0.9B) - 本地推理
+  | 'paddleocr-vl-vllm' // PaddleOCR-VL v1.5 (0.9B) - vLLM 加速
   | 'sensevoice'
   | 'video'
   | 'fasta'             // FASTA 生物序列格式
