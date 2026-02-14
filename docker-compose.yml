@@ -1,5 +1,5 @@
 # Tianshu (天枢) - Production Docker Compose
-# 模式：相对路径挂载 (无需 .env，自动识别盘符)
+# 模式：相对路径挂载 + Paddle自动下载持久化
 
 name: tianshu
 
@@ -48,16 +48,18 @@ services:
       - tianshu-network
 
   # ============================================================================
-  # Model Initializer (初始化下载)
+  # Model Initializer (用于下载非 Paddle 模型)
   # ============================================================================
   init-models:
     image: tianshu-backend:latest
     container_name: tianshu-init-models
     entrypoint: ["python", "download_models.py", "--output", "/app/models"]
     volumes:
-      # ✅ [核心修改] 使用相对路径 ./models
-      # 含义：将当前项目下的 models 文件夹，挂载到容器内的 /app/models
+      # 挂载主模型目录
       - ./models:/app/models:rw
+      # ✅ [新增] 确保初始化脚本也能看到缓存目录（虽然主要由 Worker 下载）
+      - ./models/paddlex_cache:/root/.paddlex:rw
+      - ./models/paddleocr_cache:/root/.paddleocr:rw
       - ./magic-pdf.json:/app/magic-pdf.json:rw
       - /etc/localtime:/etc/localtime:ro
     environment:
@@ -82,8 +84,10 @@ services:
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
-      # ✅ [核心修改] 相对路径挂载
       - ./models:/app/models:rw
+      # ✅ [新增] 挂载 Paddle 持久化缓存目录
+      - ./models/paddlex_cache:/root/.paddlex:rw
+      - ./models/paddleocr_cache:/root/.paddleocr:rw
       - ./magic-pdf.json:/root/magic-pdf.json:ro
       - ./input:/app/data/uploads:rw
       - ./output:/app/data/output:rw
@@ -134,13 +138,16 @@ services:
     ports:
       - "30023:30023"
     volumes:
-      # ✅ [核心修改] 将本地 ./models 挂载到容器内的 /models
-      # 这样 vLLM 内部就能通过 /models/paddlex/... 找到文件
       - ./models:/models:ro
+      # ✅ [新增] 挂载 PaddleX 缓存，确保 vLLM 也能读取到 Worker 下载的模型
+      # 注意：vLLM 可能不直接使用 ~/.paddlex，但如果它内部调用 Paddle 库则需要
+      # 这里主要是为了让 vLLM 能够访问到下载的模型文件
+      - ./models/paddlex_cache:/root/.paddlex:ro
       - /etc/localtime:/etc/localtime:ro
     environment:
       - TZ=Asia/Shanghai
       - CUDA_VISIBLE_DEVICES=${VLLM_PADDLE_DEVICE:-0}
+      - TOKENIZERS_PARALLELISM=false
     command: >
       --model /models/paddlex/PaddleOCR-VL-1.5-0.9B
       --served-model-name PaddleOCR-VL-1.5-0.9B
@@ -172,7 +179,6 @@ services:
     ports:
       - "30024:30024"
     volumes:
-      # ✅ [核心修改] 相对路径挂载
       - ./models:/models:ro
       - /etc/localtime:/etc/localtime:ro
     environment:
@@ -218,8 +224,10 @@ services:
       - "${WORKER_PORT:-8001}:8001"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      # ✅ [核心修改] 相对路径挂载
       - ./models:/app/models:rw
+      # ✅ [核心修改] 挂载 Paddle 持久化缓存目录到容器的 root 用户目录下
+      - ./models/paddlex_cache:/root/.paddlex:rw
+      - ./models/paddleocr_cache:/root/.paddleocr:rw
       - ./magic-pdf.json:/root/magic-pdf.json:ro
       - ./input:/app/data/uploads:rw
       - ./output:/app/data/output:rw
@@ -254,9 +262,9 @@ services:
       - REDIS_QUEUE_ENABLED=${REDIS_QUEUE_ENABLED:-false}
       - REDIS_HOST=${REDIS_HOST:-redis}
       - REDIS_PORT=${REDIS_PORT:-6379}
-      # ✅ 配置缓存路径，指向挂载进来的目录
-      - PADDLE_HOME=/app/models/paddlex/.paddleocr_cache
-      - PADDLEX_HOME=/app/models/paddlex/.paddlex_cache
+      # ✅ [核心修改] 更新环境变量指向挂载点
+      - PADDLE_HOME=/root/.paddleocr
+      - PADDLEX_HOME=/root/.paddlex
     mem_limit: ${WORKER_MEMORY_LIMIT:-16G}
     memswap_limit: ${WORKER_MEMORY_LIMIT:-16G}
     mem_reservation: ${WORKER_MEMORY_RESERVATION:-8G}
