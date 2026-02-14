@@ -1,5 +1,5 @@
 # Tianshu (天枢) - Production Docker Compose
-# 模式：相对路径挂载 + Paddle自动下载持久化 + 权限修复 + 任务调度
+# 终极优化版：相对路径挂载 + Paddle自动下载持久化 + 权限修复 + 任务调度 + VLLM互斥
 
 name: tianshu
 
@@ -61,6 +61,7 @@ services:
       - ./models/paddlex_cache:/root/.paddlex:rw
       - ./models/paddleocr_cache:/root/.paddleocr:rw
       - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
     environment:
       - TZ=Asia/Shanghai
       - MODEL_DOWNLOAD_SOURCE=${MODEL_DOWNLOAD_SOURCE:-auto}
@@ -79,7 +80,7 @@ services:
         - tianshu-backend:latest
     image: tianshu-backend:latest
     container_name: tianshu-backend
-    # ✅ [关键配置] 使用 root 运行，解决读取 Worker 生成文件时的 Permission Denied (404错误)
+    # ✅ [关键配置] 使用 root 运行，解决读取 Worker 生成文件时的 Permission Denied
     user: root
     restart: unless-stopped
     ports:
@@ -133,13 +134,12 @@ services:
   # ============================================================================
   # Task Scheduler (任务调度与清理)
   # ============================================================================
-  # ✅ [新增服务] 负责重置超时任务和清理旧文件，保障系统长期稳定
   scheduler:
     image: tianshu-backend:latest
     container_name: tianshu-scheduler
     user: root
     restart: unless-stopped
-    # 每60秒检查一次，重置超过60分钟未完成的 processing 任务
+    # ✅ [完美匹配] 对应 task_scheduler.py 的最新参数标准化
     command: ["python", "task_scheduler.py", "--interval", "60", "--stale-task-timeout", "60"]
     volumes:
       - ./data/db:/app/data/db:rw
@@ -151,7 +151,6 @@ services:
     environment:
       - TZ=Asia/Shanghai
       - DATABASE_PATH=/app/data/db/mineru_tianshu.db
-      # ✅ [关键修复] 添加 JWT_SECRET_KEY 防止服务崩溃重启
       - JWT_SECRET_KEY=${JWT_SECRET_KEY}
     depends_on:
       - backend
@@ -159,7 +158,7 @@ services:
       - tianshu-network
 
   # ============================================================================
-  # vLLM Service - PaddleOCR
+  # vLLM Service - PaddleOCR (默认启动)
   # ============================================================================
   vllm-paddleocr:
     image: vllm/vllm-openai:nightly
@@ -168,11 +167,10 @@ services:
     ports:
       - "30023:30023"
     volumes:
-      # 只读挂载模型根目录
       - ./models:/models:ro
-      # 挂载 PaddleX 缓存目录到 root 用户目录，供 vLLM 读取
       - ./models/paddlex_cache:/root/.paddlex:ro
       - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
     environment:
       - TZ=Asia/Shanghai
       - CUDA_VISIBLE_DEVICES=${VLLM_PADDLE_DEVICE:-0}
@@ -201,11 +199,12 @@ services:
         condition: service_completed_successfully
 
   # ============================================================================
-  # vLLM Service - MinerU
+  # vLLM Service - MinerU (手动触发，互斥控制)
   # ============================================================================
   vllm-mineru:
     image: vllm/vllm-openai:nightly
     container_name: tianshu-vllm-mineru
+    # ✅ [关键机制] restart: no 与 manual profiles，由 Worker VLLMController 控制启停
     restart: no
     profiles: ["manual"]
     ports:
@@ -213,6 +212,7 @@ services:
     volumes:
       - ./models:/models:ro
       - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
     environment:
       - TZ=Asia/Shanghai
       - CUDA_VISIBLE_DEVICES=${VLLM_MINERU_DEVICE:-0}
@@ -381,14 +381,7 @@ networks:
           gateway: 172.28.0.1
 
 volumes:
-  models:
-    driver: local
-  uploads:
-    driver: local
-  output:
-    driver: local
-  logs:
-    driver: local
+  # ✅ [核心优化] 移除了与相对挂载 (./models 等) 冲突的本地卷声明，只保留真正的具名卷
   redis-data:
     driver: local
   rustfs-data:
