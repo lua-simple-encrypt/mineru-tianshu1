@@ -355,13 +355,20 @@ async def get_task_status(
 ):
     """
     查询任务状态和详情
+
+    需要认证。用户只能查看自己的任务，管理员可以查看所有任务。
+    当任务完成时，会自动返回解析后的内容（data 字段）
+    - format=markdown: 只返回 Markdown 内容（默认）
+    - format=json: 只返回 JSON 结构化数据（MinerU 和 PaddleOCR-VL 支持）
+    - format=both: 同时返回 Markdown 和 JSON
+    可选择是否上传图片到 MinIO 并替换为 URL
     """
     task = db.get_task(task_id)
 
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    # 权限检查
+    # 权限检查: 用户只能查看自己的任务，管理员/经理可以查看所有任务
     if not current_user.has_permission(Permission.TASK_VIEW_ALL):
         if task.get("user_id") != current_user.user_id:
             raise HTTPException(status_code=403, detail="Permission denied: You can only view your own tasks")
@@ -601,6 +608,8 @@ async def cancel_task(task_id: str, current_user: User = Depends(get_current_act
 async def get_queue_stats(current_user: User = Depends(require_permission(Permission.QUEUE_VIEW))):
     """
     获取队列统计信息
+
+    需要认证和 QUEUE_VIEW 权限。
     """
     stats = db.get_queue_stats()
 
@@ -698,6 +707,13 @@ async def cleanup_old_tasks(
 ):
     """
     清理旧任务（管理接口）
+
+    同时删除任务的所有相关文件和数据库记录：
+    - 上传的原始文件
+    - 结果文件夹（包括生成的文件和所有中间文件）
+    - 数据库记录
+
+    需要管理员权限。
     """
     deleted_count = db.cleanup_old_task_records(days)
 
@@ -717,6 +733,8 @@ async def reset_stale_tasks(
 ):
     """
     重置超时的 processing 任务（管理接口）
+
+    需要管理员权限。
     """
     reset_count = db.reset_stale_tasks(timeout_minutes)
 
@@ -733,9 +751,9 @@ async def reset_stale_tasks(
 async def list_engines():
     """
     列出所有可用的处理引擎
+
+    无需认证。返回系统中所有可用的处理引擎信息。
     """
-    # ... (省略引擎列表代码，保持不变) ...
-    # 为了节省篇幅，这里复用您之前的 list_engines 实现
     engines = {
         "document": [
             {
@@ -781,14 +799,15 @@ async def list_engines():
         ],
     }
 
+    # 动态检测可用引擎
     import importlib.util
 
     if importlib.util.find_spec("paddleocr_vl") is not None:
         engines["ocr"].append(
             {
                 "name": "paddleocr_vl",
-                "display_name": "PaddleOCR-VL",
-                "description": "PaddlePaddle 视觉语言 OCR 引擎",
+                "display_name": "PaddleOCR-VL v1.5 (0.9B)", # ✅ 优化显示名称
+                "description": "PaddlePaddle 视觉语言 OCR 引擎 v1.5 (0.9B)",
                 "supported_formats": [".pdf", ".png", ".jpg", ".jpeg"],
             }
         )
@@ -797,8 +816,8 @@ async def list_engines():
         engines["ocr"].append(
             {
                 "name": "paddleocr-vl-vllm",
-                "display_name": "PaddleOCR-VL-VLLM",
-                "description": "基于 vLLM 的高性能 PaddleOCR 引擎",
+                "display_name": "PaddleOCR-VL v1.5 (vLLM)", # ✅ 优化显示名称
+                "description": "基于 vLLM 的高性能 PaddleOCR-VL v1.5 (0.9B) 引擎",
                 "supported_formats": [".pdf", ".png", ".jpg", ".jpeg"],
             }
         )
@@ -823,6 +842,7 @@ async def list_engines():
             }
         )
 
+    # 专业格式引擎
     try:
         from format_engines import FormatEngineRegistry
 
