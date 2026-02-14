@@ -37,7 +37,6 @@ export default {
     continue: '继续',
     yes: '是',
     no: '否',
-    // [新增] 通用词条
     autoRefreshLabel: '自动刷新',
     pagination: '显示 {start} 到 {end} 条，共 {total} 条',
     items: '项',
@@ -56,7 +55,6 @@ export default {
     systemConfig: '系统配置',
   },
   auth: {
-    // ... (保持不变)
     username: '用户名',
     password: '密码',
     email: '邮箱',
@@ -79,7 +77,6 @@ export default {
     registrationDisabledMessage: '系统管理员已关闭注册功能，请联系管理员获取账号',
   },
   dashboard: {
-    // ... (保持不变)
     title: '仪表盘',
     welcome: '欢迎回来',
     totalTasks: '总任务数',
@@ -192,7 +189,7 @@ export default {
     noJsonData: '无 JSON 数据',
     processingWait: '请稍候，解析完成后将自动显示结果...',
 
-    // Backend options (保持不变...)
+    // Backend options
     backendAuto: '🎯 自动选择（推荐，根据文件类型自动选择最佳引擎）',
     backendAutoHint: '🎯 自动选择: 系统会根据文件扩展名智能选择最合适的引擎进行处理',
     backendPipeline: 'MinerU Pipeline（传统多模型管道）',
@@ -201,6 +198,12 @@ export default {
     backendVLMAutoHint: '👁️ 基于 MinerU 2.5 视觉模型，擅长复杂排版和图表',
     backendHybridAutoEngine: 'MinerU Hybrid（高精度混合）',
     backendHybridAutoHint: '⚖️ 结合 Pipeline 与 VLM 优势，提供最高精度解析',
+    // [新增] Client 模式
+    backendVlmHttpClient: 'MinerU VLM Client (远程服务)',
+    backendVlmHttpClientHint: '☁️ 连接兼容 OpenAI 协议的远程 VLM 服务器进行解析',
+    backendHybridHttpClient: 'MinerU Hybrid Client (远程混合)',
+    backendHybridHttpClientHint: '☁️ 连接远程服务器，结合本地预处理与远程推理',
+
     backendPaddleOcrVl1509b: 'PaddleOCR-VL（多语言 OCR，109+ 语言）',
     backendPaddleOcrVl09bHint: '🌏 PaddleOCR-VL: 自动多语言识别，支持文档方向校正、文本矫正、版面检测',
     backendPaddleOCRVLLM: 'PaddleOCR-VL-VLLM（高性能多语言 OCR）',
@@ -214,21 +217,42 @@ export default {
     backendGenBank: '🧬 GenBank（基因序列注释格式）',
     backendGenBankHint: '🧬 GenBank: 解析基因序列注释文件（.gb/.gbk），提取特征、注释和元数据',
     
+    // [新增] Parsing Method
+    parseMethod: '解析策略',
+    methodAuto: '自动 (Auto) - 推荐',
+    methodOcr: '强制 OCR (Force OCR)',
+    methodTxt: '仅提取文本 (Text Only)',
+    methodHint: 'Auto: 自动判断; OCR: 针对扫描件/图片; Text: 仅提取原生文本层(速度最快)',
+
+    // [新增] Server URL
+    serverUrl: '远程服务器地址',
+    serverUrlPlaceholder: '例如: http://127.0.0.1:30000',
+    serverUrlHint: '当使用 Client 模式后端时，需指定远程推理服务的地址',
+
     // Language options
     langAuto: '自动检测（音频推荐）',
-    langChinese: '中文',
-    langEnglish: '英文',
-    langKorean: '韩文',
-    langJapanese: '日文',
-    langTraditional: '繁体中文',
+    langChinese: '中文 (Simplified)',
+    langEnglish: '英文 (English)',
+    langKorean: '韩文 (Korean)',
+    langJapanese: '日文 (Japanese)',
+    langTraditional: '繁体中文 (Traditional)',
     langChineseServer: '中文 (Server)',
     langChineseLite: '中文 (Lite)',
+    // [新增] 更多语言
+    langThai: '泰语 (Thai)',
+    langVietnamese: '越南语 (Vietnamese)',
+    langRussian: '俄语 (Russian)',
+    langArabic: '阿拉伯语 (Arabic)',
+    langFrench: '法语 (French)',
+    langGerman: '德语 (German)',
+    langTamil: '泰米尔语 (Tamil)',
+    langTelugu: '泰卢固语 (Telugu)',
+    langKannada: '卡纳达语 (Kannada)',
+    langGreek: '希腊语 (Greek)',
+    langLatin: '拉丁语系 (Latin)',
+    langCyrillic: '西里尔语系 (Cyrillic)',
+    langDevanagari: '梵文/印地文 (Devanagari)',
     langHint: '💡 音频文件请选择 SenseVoice 引擎，视频文件请选择 Video 引擎',
-    
-    // Method options
-    methodAuto: '自动选择（推荐）',
-    methodText: '文本提取',
-    methodOCR: 'OCR 识别',
     
     // Config Labels
     recognitionControl: '识别与解析控制',
@@ -236,7 +260,7 @@ export default {
     forceOCRStatus: '(已启用)',
     forceOCRHint: '仅在识别效果极差（如模糊扫描件）时启用，需选择正确的 OCR 语言。',
     advancedSettings: '高级配置',
-    advancedSettingsHint: '(页码、去水印、Office转换、调试)',
+    advancedSettingsHint: '(页码、去水印、调试输出)',
     pageRange: '解析范围 (Page Range)',
     pageRangeHint: '留空或 -1 表示处理到文件末尾。起始页从 0 开始。',
     preprocessing: '预处理增强',
@@ -245,7 +269,18 @@ export default {
     mediaParams: '媒体处理参数',
     keepAudioFile: '保留音频轨道文件',
     enableKeyframeOCR: '启用关键帧 OCR 内容识别',
+    
+    // [新增] Debug Output
+    outputSettings: '输出与调试设置',
     debugOutput: 'DEBUG OUTPUT',
+    dumpMarkdown: '输出 Markdown',
+    dumpMiddleJson: '输出中间结果 JSON',
+    dumpModelOutput: '输出模型原始数据',
+    dumpContentList: '输出内容列表 JSON',
+    dumpOrigPdf: '保存原始/截取 PDF',
+    drawLayout: '绘制布局边框 (Layout BBox)',
+    drawSpan: '绘制文本边框 (Span BBox)',
+    
     generateLayoutPDF: '生成 Layout 标注 PDF',
     generateSpanPDF: '生成 Span 标注 PDF',
     pageError: '结束页码不能小于开始页码',
