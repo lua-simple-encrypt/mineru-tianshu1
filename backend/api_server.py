@@ -158,7 +158,7 @@ def process_markdown_images_legacy(md_content: str, image_dir: Path, result_path
 
             if result_path_str.startswith(output_dir_str):
                 relative_path = result_path_str[len(output_dir_str) :].lstrip("/")
-                # ✅ [修复 Bug] url 编码需保留正斜杠，防止 404
+                # ✅ [修复] url 编码需保留正斜杠，防止 404
                 encoded_relative_path = quote(relative_path, safe="/")
                 encoded_filename = quote(image_filename, safe="/")
                 
@@ -314,6 +314,9 @@ async def submit_task(
             "watermark_dilation": watermark_dilation,
             "convert_office_to_pdf": convert_office_to_pdf,
         }
+
+        # ✅ [修复 Bug 3]：自动检测环境变量开启 RustFS，默认传递给 Worker
+        options["upload_images"] = os.getenv("RUSTFS_ENABLED", "true").lower() == "true"
 
         # 创建任务
         task_id = db.create_task(
@@ -745,7 +748,7 @@ async def health_check():
 async def serve_output_file(file_path: str):
     """提供输出文件的访问服务"""
     try:
-        # ✅ [核心修复] 解码并移除开头的斜杠，防止 double slash 或 encoding 问题
+        # 解码并移除开头的斜杠，防止 double slash 或 encoding 问题
         decoded_path = unquote(file_path).lstrip("/")
         
         # 拼接完整路径
@@ -753,17 +756,24 @@ async def serve_output_file(file_path: str):
         
         logger.debug(f"📥 Serving output file: {full_path}")
 
-        # ✅ [安全修复] 防止目录穿越
+        # 防止目录穿越
         if not full_path.is_relative_to(OUTPUT_DIR.resolve()) or not full_path.is_file():
             logger.warning(f"❌ Access denied or file not found: {full_path}")
             raise HTTPException(status_code=404, detail="File not found or access denied")
 
         # 自动猜测 MIME 类型
         media_type, _ = mimetypes.guess_type(full_path)
+        media_type = media_type or "application/octet-stream"
+
+        # ✅ [修复 Bug 4] 强制浏览器内联预览 (inline)，不使用 filename 参数以免触发 attachment 下载
+        headers = {
+            "Content-Disposition": f"inline; filename*=utf-8''{quote(full_path.name)}"
+        }
+        
         return FileResponse(
             path=str(full_path), 
-            media_type=media_type or "application/octet-stream", 
-            filename=full_path.name
+            media_type=media_type, 
+            headers=headers
         )
         
     except HTTPException:
@@ -777,7 +787,7 @@ async def serve_output_file(file_path: str):
 async def serve_upload_file(file_path: str):
     """提供上传源文件的访问服务"""
     try:
-        # ✅ [核心修复] 解码并移除开头的斜杠
+        # 解码并移除开头的斜杠
         decoded_path = unquote(file_path).lstrip("/")
         
         # 拼接完整路径
@@ -785,17 +795,24 @@ async def serve_upload_file(file_path: str):
         
         logger.debug(f"📥 Serving upload file: {full_path}")
 
-        # ✅ [安全修复] 防止目录穿越
+        # 防止目录穿越
         if not full_path.is_relative_to(UPLOAD_DIR.resolve()) or not full_path.is_file():
             logger.warning(f"❌ Access denied or file not found: {full_path}")
             raise HTTPException(status_code=404, detail="File not found or access denied")
 
         # 自动猜测 MIME 类型
         media_type, _ = mimetypes.guess_type(full_path)
+        media_type = media_type or "application/octet-stream"
+
+        # ✅ [修复 Bug 4] 强制浏览器内联预览 (inline)，不使用 filename 参数以免触发 attachment 下载
+        headers = {
+            "Content-Disposition": f"inline; filename*=utf-8''{quote(full_path.name)}"
+        }
+
         return FileResponse(
             path=str(full_path), 
-            media_type=media_type or "application/octet-stream", 
-            filename=full_path.name
+            media_type=media_type, 
+            headers=headers
         )
         
     except HTTPException:
