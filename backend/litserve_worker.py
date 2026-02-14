@@ -171,7 +171,7 @@ except ImportError as e:
 
 
 # ==============================================================================
-# VLLM Container Controller (互斥切换版 + Pickle 修复)
+# VLLM Container Controller (互斥切换版 - 无检测)
 # ==============================================================================
 class VLLMController:
     """管理 vLLM Docker 容器的互斥启动"""
@@ -190,15 +190,14 @@ class VLLMController:
             logger.warning(f"⚠️  Docker client init failed: {e}")
             return None
 
-    def ensure_service(self, target_container: str, conflict_container: str, health_url: str, timeout: int = 300):
+    def ensure_service(self, target_container: str, conflict_container: str):
         """
         确保目标容器运行，并关闭冲突容器 (互斥逻辑)
+        注意：不再检测健康状态，发送启动命令后直接返回
         
         Args:
             target_container: 需要运行的容器名
             conflict_container: 需要关闭的互斥容器名
-            health_url: 目标容器的健康检查地址
-            timeout: 超时时间
         """
         client = self._get_client()
         if not client:
@@ -209,11 +208,7 @@ class VLLMController:
             try:
                 target = client.containers.get(target_container)
                 if target.status == 'running':
-                    # 【优化】即使容器在运行，也建议检查一次 Health 以确保不是僵死状态
-                    # 但为了性能，这里假设 running 即正常，依赖后续的 _wait_for_health 做最终确认
                     logger.info(f"✅ Target service {target_container} is already running.")
-                    # 仍然等待健康检查通过，防止容器刚启动但端口未就绪
-                    self._wait_for_health(health_url, timeout=30) 
                     return
             except Exception as e:
                 # 如果找不到容器，说明没创建，提示用户
@@ -227,54 +222,24 @@ class VLLMController:
                     logger.info(f"🛑 Stopping conflicting service {conflict_container} to free VRAM...")
                     conflict.stop()
                     logger.info(f"✅ Service {conflict_container} stopped.")
+                    # 简单休眠等待释放
+                    time.sleep(2)
             except Exception:
                 # 冲突容器可能不存在或已停止，忽略
                 pass
 
             # 3. 启动目标容器
-            logger.info(f"🚀 Starting service {target_container} (Cold Start)...")
+            logger.info(f"🚀 Starting service {target_container} (Manual/Cold Start)...")
             target.start()
-
-            # 4. 等待健康检查
-            self._wait_for_health(health_url, timeout)
+            
+            # 【修改】不再等待健康检查，直接返回
+            logger.info(f"⚠️ Service start triggered. Assuming {target_container} will be ready shortly (No health check).")
             
         finally:
             try:
                 client.close()
             except:
                 pass
-
-    def _wait_for_health(self, url: str, timeout: int):
-        """
-        轮询健康检查接口
-        【修复 Fix #2】增加对 ConnectionError 的鲁棒处理，防止服务启动初期连接被拒绝导致 Worker 崩溃
-        """
-        start_time = time.time()
-        logger.info(f"⏳ Waiting for service at {url} (timeout: {timeout}s)...")
-        
-        while time.time() - start_time < timeout:
-            try:
-                # 显式使用 host.docker.internal 或者是 Docker DNS 名
-                response = requests.get(url, timeout=5) # 增加 timeout 防止请求卡死
-                if response.status_code == 200:
-                    logger.info(f"✅ Service is ready: {url}")
-                    return
-                else:
-                    # 服务已响应但状态码不是 200 (可能是 503 Loading...)
-                    logger.debug(f"⏳ Service loading... Status: {response.status_code}")
-            
-            except requests.exceptions.ConnectionError:
-                # 【关键修复】捕获连接错误（服务未监听端口），不抛出异常，继续等待
-                pass
-            except requests.exceptions.ReadTimeout:
-                # 捕获读取超时
-                pass
-            except Exception as e:
-                logger.warning(f"⚠️ Health check transient error: {e}")
-            
-            time.sleep(2) # 每2秒重试一次
-        
-        raise TimeoutError(f"Service at {url} did not become ready in {timeout} seconds")
 
 
 class MinerUWorkerAPI(ls.LitAPI):
@@ -653,20 +618,17 @@ class MinerUWorkerAPI(ls.LitAPI):
             
             # 如果是 PaddleOCR 任务
             if backend == "paddleocr-vl-vllm" and self.paddleocr_vl_vllm_api:
-                base = self.paddleocr_vl_vllm_api.replace("/v1", "")
-                health = f"{base}/health"
                 # 确保 Paddle 运行，关闭 MinerU
-                logger.info(f"🔄 Ensuring PaddleOCR-VL VLLM service is ready: {health}")
-                self.vllm_controller.ensure_service(paddle_container, mineru_container, health)
+                logger.info(f"🔄 Ensuring PaddleOCR-VL VLLM service is running (No wait)")
+                self.vllm_controller.ensure_service(paddle_container, mineru_container)
                 
             # 如果是 MinerU 任务 (vlm/hybrid local 模式)
             # 注意: remote client 模式不需要启动本地容器
             elif backend in ["vlm-auto-engine", "hybrid-auto-engine"] and self.mineru_vllm_api:
-                base = self.mineru_vllm_api.replace("/v1", "")
-                health = f"{base}/health"
                 # 确保 MinerU 运行，关闭 Paddle
-                logger.info(f"🔄 Ensuring MinerU VLLM service is ready: {health}")
-                self.vllm_controller.ensure_service(mineru_container, paddle_container, health)
+                logger.info(f"🔄 Ensuring MinerU VLLM service is running (No wait)")
+                # 【修改】不再等待 health check 成功，直接继续
+                self.vllm_controller.ensure_service(mineru_container, paddle_container)
 
             # 检查文件扩展名
             file_ext = Path(file_path).suffix.lower()
