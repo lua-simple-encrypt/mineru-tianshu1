@@ -139,9 +139,8 @@ services:
       - "30023:30023"
     volumes:
       - ./models:/models:ro
-      # ✅ [新增] 挂载 PaddleX 缓存，确保 vLLM 也能读取到 Worker 下载的模型
-      # 注意：vLLM 可能不直接使用 ~/.paddlex，但如果它内部调用 Paddle 库则需要
-      # 这里主要是为了让 vLLM 能够访问到下载的模型文件
+      # ✅ [新增] 修复路径映射：将宿主机缓存中的具体模型目录映射到容器内 vLLM 预期的位置
+      - ./models/paddlex_cache/official_models/PaddleOCR-VL-1.5-0.9B:/models/paddlex/PaddleOCR-VL-1.5-0.9B:ro
       - ./models/paddlex_cache:/root/.paddlex:ro
       - /etc/localtime:/etc/localtime:ro
     environment:
