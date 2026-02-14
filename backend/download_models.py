@@ -3,8 +3,8 @@
 模型预下载脚本 - Tianshu (Runtime Auto-Download for Paddle + Pre-download for others)
 
 策略说明:
-1. MinerU / YOLO / Audio 模型: 使用此脚本预先下载到 ./models 目录。
-2. PaddleOCR / PaddleX 模型:  设置为 auto_download。
+1. MinerU / YOLO / Audio / PaddleOCR-VL 模型: 使用此脚本预先下载到 ./models 目录。
+2. 其他普通 PaddleOCR / PaddleX 模型:  设置为 auto_download。
    - 它们将在容器运行时由引擎自动下载。
    - 数据会持久化保存到宿主机的 ./models/paddlex_cache 和 ./models/paddleocr_cache 目录中。
    - (通过 docker-compose.yml 的 /root/.paddlex 和 /root/.paddleocr 挂载实现)
@@ -47,27 +47,28 @@ MODELS = {
     },
 
     # -------------------------------------------------------------------------
-    # 2. PaddleX / PaddleOCR 模型 (改为运行时自动下载)
-    # -------------------------------------------------------------------------
-    # 策略：不在此处下载。容器启动后，PaddleX 库会自动将模型下载到 
-    # /root/.paddlex (即宿主机的 ./models/paddlex_cache)
+    # 2. PaddleX / PaddleOCR 模型 
     # -------------------------------------------------------------------------
     
-    # --- 多模态文档解析 (VLM) ---
+    # --- 多模态文档解析 (VLM) - 强制预下载供 vLLM 服务使用 ---
     "paddleocr_vl_1_5": {
         "name": "PaddleOCR-VL-1.5-0.9B",
-        "auto_download": True, # ✅ 标记为自动下载，脚本跳过
-        "description": "Runtime auto-download to ./models/paddlex_cache/ (mapped to /root/.paddlex)",
-        "required": False
+        "repo_id": "PaddlePaddle/PaddleOCR-VL-1.5",
+        "source": "huggingface",
+        "target_dir": "paddlex_cache/official_models/PaddleOCR-VL-1.5-0.9B",
+        "description": "Pre-downloaded for vLLM Server to avoid crash loops",
+        "required": True
     },
     "paddleocr_vl_0_9": {
         "name": "PaddleOCR-VL-0.9B",
-        "auto_download": True,
-        "description": "Runtime auto-download to ./models/paddlex_cache/",
+        "repo_id": "PaddlePaddle/PaddleOCR-VL",
+        "source": "huggingface",
+        "target_dir": "paddlex_cache/official_models/PaddleOCR-VL-0.9B",
+        "description": "Pre-downloaded for vLLM Server to avoid crash loops",
         "required": False
     },
 
-    # --- 版面分析 (Layout) ---
+    # --- 版面分析 (Layout) - 运行时自动下载 ---
     "pp_doclayout_v3": {
         "name": "PP-DocLayoutV3",
         "auto_download": True,
@@ -90,7 +91,7 @@ MODELS = {
         "required": False
     },
 
-    # --- 文档矫正/方向分类 ---
+    # --- 文档矫正/方向分类 - 运行时自动下载 ---
     "pp_lcnet_doc_ori": {
         "name": "PP-LCNet_x1_0_doc_ori",
         "auto_download": True,
@@ -114,8 +115,7 @@ MODELS = {
         "required": False
     },
 
-    # --- 通用 OCR (PP-OCRv5) ---
-    # 注意：如果代码使用 PaddleOCR 原生库，会下载到 ./models/paddleocr_cache (/root/.paddleocr)
+    # --- 通用 OCR (PP-OCRv5) - 运行时自动下载 ---
     "pp_ocrv5_det": {
         "name": "PP-OCRv5_mobile_det",
         "auto_download": True,
@@ -137,7 +137,7 @@ MODELS = {
         "required": False
     },
 
-    # --- 多语言 OCR ---
+    # --- 多语言 OCR - 运行时自动下载 ---
     "eslav_pp_ocrv5_mobile_rec": {
         "name": "eslav_PP-OCRv5_mobile_rec",
         "auto_download": True,
@@ -154,7 +154,7 @@ MODELS = {
         "required": False
     },
 
-    # --- 公式/表格识别 ---
+    # --- 公式/表格识别 - 运行时自动下载 ---
     "pp_formulanet": {
         "name": "PP-FormulaNet_plus-L",
         "auto_download": True,
@@ -228,7 +228,7 @@ MODELS = {
 }
 
 # ==============================================================================
-# 下载函数 (保持不变)
+# 下载函数
 # ==============================================================================
 
 def download_from_huggingface(repo_id, target_dir, filename=None):
@@ -300,8 +300,12 @@ def verify_model_files(path, model_name):
             logger.warning(f"   ⚠️  No safetensors found in {path}")
             return False
     
-    # 3. Paddle Models (Skipped verification here as they are auto-downloaded)
-    
+    # 3. PaddleOCR-VL VLM 模型验证
+    elif model_name in ["paddleocr_vl_1_5", "paddleocr_vl_0_9"]:
+        if not any(path_obj.rglob("*.safetensors")):
+            logger.warning(f"   ⚠️  No safetensors found in {path}")
+            return False
+            
     # 4. YOLO (单文件或目录)
     elif model_name == "yolo11":
         if path_obj.is_file():
