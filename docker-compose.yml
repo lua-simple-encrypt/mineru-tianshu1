@@ -60,7 +60,7 @@ services:
       # 确保初始化脚本也能看到并写入缓存目录
       - ./models/paddlex_cache:/root/.paddlex:rw
       - ./models/paddleocr_cache:/root/.paddleocr:rw
-      - ./magic-pdf.json:/app/magic-pdf.json:rw
+      # ✅ [已彻底删除 magic-pdf.json 挂载，交由 entrypoint 分发]
       - /etc/localtime:/etc/localtime:ro
     environment:
       - TZ=Asia/Shanghai
@@ -87,7 +87,7 @@ services:
       - ./models:/app/models:rw
       - ./models/paddlex_cache:/root/.paddlex:rw
       - ./models/paddleocr_cache:/root/.paddleocr:rw
-      - ./magic-pdf.json:/root/magic-pdf.json:ro
+      # ✅ [已彻底删除 magic-pdf.json 挂载，交由 entrypoint 分发]
       - ./input:/app/data/uploads:rw
       - ./output:/app/data/output:rw
       - ./logs/backend:/app/logs:rw
@@ -124,7 +124,6 @@ services:
     networks:
       - tianshu-network
     depends_on:
-      # ✅ [核心修改] 将列表语法改为字典语法，强制等待 init-models 执行完毕
       rustfs:
         condition: service_started
       init-models:
@@ -141,8 +140,6 @@ services:
       - "30023:30023"
     volumes:
       - ./models:/models:ro
-      # 映射下载脚本预先缓存好的 VLLM 权重目录
-      - ./models/paddlex_cache/official_models/PaddleOCR-VL-1.5-0.9B:/models/paddlex/PaddleOCR-VL-1.5-0.9B:ro
       - ./models/paddlex_cache:/root/.paddlex:ro
       - /etc/localtime:/etc/localtime:ro
     environment:
@@ -150,7 +147,7 @@ services:
       - CUDA_VISIBLE_DEVICES=${VLLM_PADDLE_DEVICE:-0}
       - TOKENIZERS_PARALLELISM=false
     command: >
-      --model /models/paddlex/PaddleOCR-VL-1.5-0.9B
+      --model /root/.paddlex/official_models/PaddleOCR-VL-1.5-0.9B
       --served-model-name PaddleOCR-VL-1.5-0.9B
       --trust-remote-code
       --host 0.0.0.0
@@ -169,7 +166,6 @@ services:
     networks:
       - tianshu-network
     depends_on:
-      # ✅ [核心修改] 强制要求等待预下载脚本执行完毕，防止 vLLM 找不到模型一直崩溃重启
       init-models:
         condition: service_completed_successfully
 
@@ -235,7 +231,7 @@ services:
       - ./models:/app/models:rw
       - ./models/paddlex_cache:/root/.paddlex:rw
       - ./models/paddleocr_cache:/root/.paddleocr:rw
-      - ./magic-pdf.json:/root/magic-pdf.json:ro
+      # ✅ [已彻底删除 magic-pdf.json 挂载，交由 entrypoint 分发]
       - ./input:/app/data/uploads:rw
       - ./output:/app/data/output:rw
       - ./logs/worker:/app/logs:rw
@@ -287,7 +283,6 @@ services:
     networks:
       - tianshu-network
     depends_on:
-      # ✅ [核心修改] 将列表语法改为字典语法，强制等待 backend 启动且 init-models 执行完毕
       rustfs:
         condition: service_started
       backend:
