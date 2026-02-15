@@ -1,5 +1,5 @@
 # Tianshu (天枢) - Production Docker Compose
-# 终极优化版：相对路径挂载 + Paddle自动下载持久化 + 权限修复 + 任务调度 + VLLM互斥 + 日志静默防刷屏
+# 终极优化版：相对路径挂载 + Paddle自动下载持久化 + 权限修复 + 任务调度 + VLLM互斥 + 日志静默防刷屏 + 大图显存溢出修复
 
 name: tianshu
 
@@ -191,6 +191,7 @@ services:
       --gpu-memory-utilization 0.7
       --max-model-len 16384
       --enforce-eager
+      --limit-mm-per-prompt image=10
     shm_size: 32gb
     deploy:
       resources:
@@ -236,6 +237,7 @@ services:
       --gpu-memory-utilization 0.7
       --max-model-len 8192
       --enforce-eager
+      --limit-mm-per-prompt image=10
     shm_size: 32gb
     deploy:
       resources:
