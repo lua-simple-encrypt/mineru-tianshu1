@@ -266,6 +266,84 @@
                    </div>
                 </div>
 
+                <div v-if="['paddleocr-vl', 'paddleocr-vl-vllm'].includes(config.backend)">
+                   <label class="block text-xs font-bold text-green-600 uppercase tracking-wide mb-2">
+                     {{ $t('task.paddleOCROptions') }}
+                   </label>
+                   <div class="bg-green-50 border border-green-100 rounded p-3 space-y-3">
+                      <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
+                        <label class="flex items-center cursor-pointer">
+                          <input v-model="config.useDocOrientationClassify" type="checkbox" class="mr-2 rounded text-green-600"/> 
+                          <span class="text-xs text-gray-700">{{ $t('task.useDocOrientationClassify') }}</span>
+                        </label>
+                        <label class="flex items-center cursor-pointer">
+                          <input v-model="config.useDocUnwarping" type="checkbox" class="mr-2 rounded text-green-600"/> 
+                          <span class="text-xs text-gray-700">{{ $t('task.useDocUnwarping') }}</span>
+                        </label>
+                        <label class="flex items-center cursor-pointer">
+                          <input v-model="config.useLayoutDetection" type="checkbox" class="mr-2 rounded text-green-600"/> 
+                          <span class="text-xs text-gray-700">{{ $t('task.useLayoutDetection') }}</span>
+                        </label>
+                        <label class="flex items-center cursor-pointer">
+                          <input v-model="config.useChartRecognition" type="checkbox" class="mr-2 rounded text-green-600"/> 
+                          <span class="text-xs text-gray-700">{{ $t('task.useChartRecognition') }}</span>
+                        </label>
+                        <label class="flex items-center cursor-pointer">
+                          <input v-model="config.useSealRecognition" type="checkbox" class="mr-2 rounded text-green-600"/> 
+                          <span class="text-xs text-gray-700">{{ $t('task.useSealRecognition') }}</span>
+                        </label>
+                        <label class="flex items-center cursor-pointer">
+                          <input v-model="config.useOcrForImageBlock" type="checkbox" class="mr-2 rounded text-green-600"/> 
+                          <span class="text-xs text-gray-700">{{ $t('task.useOcrForImageBlock') }}</span>
+                        </label>
+                        <label class="flex items-center cursor-pointer">
+                          <input v-model="config.layoutNms" type="checkbox" class="mr-2 rounded text-green-600"/> 
+                          <span class="text-xs text-gray-700">{{ $t('task.layoutNms') }}</span>
+                        </label>
+                        <label class="flex items-center cursor-pointer">
+                          <input v-model="config.restructurePages" type="checkbox" class="mr-2 rounded text-green-600"/> 
+                          <span class="text-xs text-gray-700">{{ $t('task.restructurePages') }}</span>
+                        </label>
+                      </div>
+
+                      <hr class="border-green-200 border-dashed" />
+
+                      <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        <div>
+                          <label class="block text-[10px] text-gray-500 mb-1">{{ $t('task.temperature') }}</label>
+                          <input v-model.number="config.temperature" type="number" step="0.1" class="w-full form-input-sm" />
+                        </div>
+                        <div>
+                          <label class="block text-[10px] text-gray-500 mb-1">{{ $t('task.topP') }}</label>
+                          <input v-model.number="config.topP" type="number" step="0.1" class="w-full form-input-sm" />
+                        </div>
+                        <div>
+                          <label class="block text-[10px] text-gray-500 mb-1">{{ $t('task.repetitionPenalty') }}</label>
+                          <input v-model.number="config.repetitionPenalty" type="number" step="0.1" class="w-full form-input-sm" />
+                        </div>
+                        <div>
+                          <label class="block text-[10px] text-gray-500 mb-1">{{ $t('task.layoutShapeMode') }}</label>
+                          <select v-model="config.layoutShapeMode" class="w-full form-input-sm">
+                             <option value="auto">auto</option>
+                             <option value="optimize">optimize</option>
+                          </select>
+                        </div>
+                        <div class="col-span-2">
+                          <label class="block text-[10px] text-gray-500 mb-1">{{ $t('task.minMaxPixels') }}</label>
+                          <div class="flex items-center space-x-1">
+                            <input v-model.number="config.minPixels" type="number" class="w-full form-input-sm" />
+                            <span class="text-gray-400">-</span>
+                            <input v-model.number="config.maxPixels" type="number" class="w-full form-input-sm" />
+                          </div>
+                        </div>
+                        <div class="col-span-2">
+                          <label class="block text-[10px] text-gray-500 mb-1">{{ $t('task.markdownIgnoreLabels') }}</label>
+                          <input v-model="config.markdownIgnoreLabels" type="text" class="w-full form-input-sm" placeholder="逗号分隔" />
+                        </div>
+                      </div>
+                   </div>
+                </div>
+
                 <div v-if="isMinerUBackend">
                   <div class="pt-2 border-t border-dashed border-gray-200 mt-2">
                     <label class="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">{{ $t('task.outputSettings') }}</label>
@@ -419,6 +497,26 @@ const defaultConfig = {
   
   // 远程服务
   server_url: '',
+
+  // === PaddleOCR 高级参数默认值 ===
+  useDocOrientationClassify: false,
+  useDocUnwarping: false,
+  useLayoutDetection: true,
+  useChartRecognition: false,
+  useSealRecognition: true,
+  useOcrForImageBlock: false,
+  mergeTables: true,
+  relevelTitles: true,
+  layoutShapeMode: 'auto',
+  promptLabel: 'ocr',
+  repetitionPenalty: 1.0,
+  temperature: 0.0,
+  topP: 1.0,
+  minPixels: 147384,
+  maxPixels: 2822400,
+  layoutNms: true,
+  restructurePages: true,
+  markdownIgnoreLabels: 'header,header_image,footer,footer_image,number,footnote,aside_text',
 
   // Mineru Debug Options (Default: True as per source code)
   draw_layout_bbox: true, 
