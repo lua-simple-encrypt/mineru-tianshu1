@@ -244,7 +244,7 @@ export interface SubmitTaskRequest {
   maxPixels?: number
   layoutNms?: boolean
   restructurePages?: boolean
-  markdownIgnoreLabels?: string[]
+  markdownIgnoreLabels?: string // ✅ 修改为 string，对应表单中的逗号分隔字符串
 }
 
 // 任务信息
