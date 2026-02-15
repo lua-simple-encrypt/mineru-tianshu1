@@ -1,5 +1,5 @@
 # Tianshu (天枢) - Production Docker Compose
-# 终极优化版：相对路径挂载 + Paddle自动下载持久化 + 权限修复 + 任务调度 + VLLM互斥 + 日志静默防刷屏 + 大图显存溢出修复
+# 终极优化版：相对路径挂载 + Paddle自动下载持久化 + 权限修复 + 任务调度 + VLLM互斥 + 日志静默防刷屏 + 大图显存溢出修复 + 并发限流
 
 name: tianshu
 
@@ -53,11 +53,9 @@ services:
   init-models:
     image: tianshu-backend:latest
     container_name: tianshu-init-models
-    # 生成 magic-pdf.json 到 /app/models (宿主机 ./models)，供其他容器复制
     entrypoint: ["python", "download_models.py", "--output", "/app/models"]
     volumes:
       - ./models:/app/models:rw
-      # 挂载缓存目录，确保自动下载的模型能持久化
       - ./models/paddlex_cache:/root/.paddlex:rw
       - ./models/paddleocr_cache:/root/.paddleocr:rw
       - /etc/localtime:/etc/localtime:ro
@@ -80,19 +78,15 @@ services:
         - tianshu-backend:latest
     image: tianshu-backend:latest
     container_name: tianshu-backend
-    # ✅ [关键配置] 使用 root 运行，解决读取 Worker 生成文件时的 Permission Denied
     user: root
     restart: unless-stopped
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
-      # 👇👇👇 [核心修复] 挂载本地代码目录，使修改立即生效 👇👇👇
       - ./backend:/app/backend:rw
-      
       - ./models:/app/models:rw
       - ./models/paddlex_cache:/root/.paddlex:rw
       - ./models/paddleocr_cache:/root/.paddleocr:rw
-      # 数据卷挂载
       - ./input:/app/data/uploads:rw
       - ./output:/app/data/output:rw
       - ./logs/backend:/app/logs:rw
@@ -142,7 +136,6 @@ services:
     container_name: tianshu-scheduler
     user: root
     restart: unless-stopped
-    # ✅ [完美匹配] 对应 task_scheduler.py 的最新参数标准化
     command: ["python", "task_scheduler.py", "--interval", "60", "--stale-task-timeout", "60"]
     volumes:
       - ./data/db:/app/data/db:rw
@@ -178,7 +171,6 @@ services:
       - TZ=Asia/Shanghai
       - CUDA_VISIBLE_DEVICES=${VLLM_PADDLE_DEVICE:-0}
       - TOKENIZERS_PARALLELISM=false
-      # ✅ [修复 Bug 6] 强力压制底层 C++ 和 Python 的刷屏日志 (如 smart_resize)
       - GLOG_minloglevel=2
       - VLLM_LOGGING_LEVEL=ERROR
       - PYTHONWARNINGS=ignore
@@ -213,7 +205,6 @@ services:
   vllm-mineru:
     image: vllm/vllm-openai:nightly
     container_name: tianshu-vllm-mineru
-    # ✅ [关键机制] restart: no 与 manual profiles，由 Worker VLLMController 控制启停
     restart: no
     profiles: ["manual"]
     ports:
@@ -225,7 +216,6 @@ services:
     environment:
       - TZ=Asia/Shanghai
       - CUDA_VISIBLE_DEVICES=${VLLM_MINERU_DEVICE:-0}
-      # ✅ [修复 Bug 6] 同样对 MinerU 的 VLLM 容器执行日志静默
       - GLOG_minloglevel=2
       - VLLM_LOGGING_LEVEL=ERROR
       - PYTHONWARNINGS=ignore
@@ -273,9 +263,7 @@ services:
     ports:
       - "${WORKER_PORT:-8001}:8001"
     volumes:
-      # 👇👇👇 [核心修复] 挂载本地代码目录，使修改立即生效 👇👇👇
       - ./backend:/app/backend:rw
-      
       - /var/run/docker.sock:/var/run/docker.sock
       - ./models:/app/models:rw
       - ./models/paddlex_cache:/root/.paddlex:rw
@@ -291,12 +279,12 @@ services:
       - HOST=0.0.0.0
       - WORKER_PORT=8001
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - WORKER_GPUS=${WORKER_GPUS:-2}
+      - WORKER_GPUS=1      # ✅ 限制为每张显卡 1 个工作进程，防止任务挤爆显存
+      - MAX_BATCH_SIZE=1   # ✅ 限制并发批处理数为 1，确保稳定串行处理
       - MODEL_PATH=/app/models
       - OUTPUT_PATH=/app/data/output
       - UPLOAD_PATH=/app/data/uploads
       - DATABASE_PATH=${DATABASE_PATH:-/app/data/db/mineru_tianshu.db}
-      - MAX_BATCH_SIZE=${MAX_BATCH_SIZE:-4}
       - TIMEOUT=${WORKER_TIMEOUT:-300}
       - MODEL_DOWNLOAD_SOURCE=${MODEL_DOWNLOAD_SOURCE:-auto}
       - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
@@ -399,7 +387,6 @@ networks:
           gateway: 172.28.0.1
 
 volumes:
-  # ✅ [核心优化] 移除了与相对挂载 (./models 等) 冲突的本地卷声明，只保留真正的具名卷
   redis-data:
     driver: local
   rustfs-data:
