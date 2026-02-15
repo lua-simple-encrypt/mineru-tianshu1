@@ -174,17 +174,18 @@ services:
       - GLOG_minloglevel=2
       - VLLM_LOGGING_LEVEL=ERROR
       - PYTHONWARNINGS=ignore
+    # ⬇️ 关键优化：调低显存占用至 0.85，将 image limit 设为 1 以匹配串行处理逻辑
     command: >
       --model /root/.paddlex/official_models/PaddleOCR-VL-1.5-0.9B
       --served-model-name PaddleOCR-VL-1.5-0.9B
       --trust-remote-code
       --host 0.0.0.0
       --port 30023
-      --gpu-memory-utilization 0.90
+      --gpu-memory-utilization 0.85
       --max-model-len 8192
       --max-num-batched-tokens 8192
       --enforce-eager
-      --limit-mm-per-prompt '{"image": 4}'
+      --limit-mm-per-prompt '{"image": 1}'
     shm_size: 32gb
     deploy:
       resources:
@@ -225,11 +226,11 @@ services:
       --trust-remote-code
       --host 0.0.0.0
       --port 30024
-      --gpu-memory-utilization 0.90
+      --gpu-memory-utilization 0.85
       --max-model-len 8192
       --max-num-batched-tokens 8192
       --enforce-eager
-      --limit-mm-per-prompt '{"image": 4}'
+      --limit-mm-per-prompt '{"image": 1}'
     shm_size: 32gb
     deploy:
       resources:
@@ -279,8 +280,9 @@ services:
       - HOST=0.0.0.0
       - WORKER_PORT=8001
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - WORKER_GPUS=1      # ✅ 限制为每张显卡 1 个工作进程，防止任务挤爆显存
-      - MAX_BATCH_SIZE=1   # ✅ 限制并发批处理数为 1，确保稳定串行处理
+      # ✅ 限制 Worker 并发，配合 vLLM 的配置
+      - WORKER_GPUS=1
+      - MAX_BATCH_SIZE=1
       - MODEL_PATH=/app/models
       - OUTPUT_PATH=/app/data/output
       - UPLOAD_PATH=/app/data/uploads
