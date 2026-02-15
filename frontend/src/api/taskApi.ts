@@ -11,6 +11,10 @@ import type {
   TaskQueryParams,
 } from './types'
 
+// =================================================================
+// 核心任务操作
+// =================================================================
+
 /**
  * 提交任务
  */
@@ -113,5 +117,49 @@ export async function listTasks(params: TaskQueryParams): Promise<TaskListRespon
   const response = await apiClient.get<TaskListResponse>('/api/v1/queue/tasks', {
     params,
   })
+  return response.data
+}
+
+// =================================================================
+// 新增管理接口：重试、暂停、恢复、清理
+// =================================================================
+
+/**
+ * 重试失败的任务
+ */
+export async function retryTask(taskId: string): Promise<ApiResponse> {
+  const response = await apiClient.post<ApiResponse>(`/api/v1/tasks/${taskId}/retry`)
+  return response.data
+}
+
+/**
+ * 暂停任务 (仅 Pending 状态有效)
+ */
+export async function pauseTask(taskId: string): Promise<ApiResponse> {
+  const response = await apiClient.post<ApiResponse>(`/api/v1/tasks/${taskId}/pause`)
+  return response.data
+}
+
+/**
+ * 恢复任务 (仅 Paused 状态有效)
+ */
+export async function resumeTask(taskId: string): Promise<ApiResponse> {
+  const response = await apiClient.post<ApiResponse>(`/api/v1/tasks/${taskId}/resume`)
+  return response.data
+}
+
+/**
+ * 清理任务缓存 (删除磁盘文件，保留数据库记录)
+ */
+export async function clearTaskCache(taskId: string): Promise<ApiResponse> {
+  const response = await apiClient.post<ApiResponse>(`/api/v1/tasks/${taskId}/clear-cache`)
+  return response.data
+}
+
+/**
+ * 一键清理所有失败的任务
+ */
+export async function clearFailedTasks(): Promise<{ status: string; deleted_count: number }> {
+  const response = await apiClient.delete<{ status: string; deleted_count: number }>('/api/v1/tasks/failed/clear')
   return response.data
 }
