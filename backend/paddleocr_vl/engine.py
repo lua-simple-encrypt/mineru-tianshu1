@@ -240,11 +240,32 @@ class PaddleOCRVLEngine:
 
                 # 提取 Markdown
                 page_md = ""
+                # =========================================================
+                # 【关键修复】正确从字典或对象中提取文本
+                # =========================================================
                 if hasattr(res, "markdown") and res.markdown:
-                    page_md = str(res.markdown)
+                    # 1. 如果是字典，提取 'markdown_texts'
+                    if isinstance(res.markdown, dict):
+                        page_md = res.markdown.get('markdown_texts', '')
+                        # 有时候可能是 'text'
+                        if not page_md:
+                            page_md = res.markdown.get('text', '')
+                    # 2. 如果是对象，尝试访问 .markdown_texts 属性
+                    elif hasattr(res.markdown, 'markdown_texts'):
+                        page_md = res.markdown.markdown_texts
+                    # 3. 如果已经是字符串，直接使用
+                    elif isinstance(res.markdown, str):
+                        page_md = res.markdown
+                    # 4. 兜底：强转字符串（可能会变成字典字符串，但在没办法时只能这样）
+                    else:
+                        page_md = str(res.markdown)
+                
+                # 兼容旧版本 API
                 elif hasattr(res, "str") and res.str:
                     page_md = str(res.str)
-                elif hasattr(res, "save_to_markdown"):
+                
+                # 尝试从保存的文件读取（最可靠的方式）
+                if not page_md and hasattr(res, "save_to_markdown"):
                     try:
                         res.save_to_markdown(str(page_dir))
                         saved_mds = list(page_dir.glob("*.md"))
@@ -255,6 +276,8 @@ class PaddleOCRVLEngine:
 
                 if page_md:
                     markdown_pages.append(page_md)
+                else:
+                    logger.warning(f"⚠️ Page {idx}: No markdown content extracted.")
 
             # 合并结果
             full_markdown = "\n\n---\n\n".join(markdown_pages)
