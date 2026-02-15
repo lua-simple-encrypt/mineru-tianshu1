@@ -121,11 +121,16 @@ class MinerUPipelineEngine:
         if not text:
             return ""
 
+        # DEBUG日志：如果你在控制台没看到这句话，说明代码没生效（需要重启服务）
+        if "117" in text or "LVEDd" in text:
+            logger.info(f"🧹 [DEBUG] Executing _clean_markdown... (Length: {len(text)})")
+
         # 1. HTML 反转义 (执行两次以解决 &amp;gt; 这种双重转义问题)
         text = html.unescape(text)
         text = html.unescape(text)
 
         # 2. 暴力替换常见的未转义字符 (作为 html.unescape 的兜底)
+        # 这一步能解决 &gt; 变成 > 的问题
         text = text.replace('&gt;', '>').replace('&lt;', '<').replace('&amp;', '&')
 
         # 3. 去除 LaTeX 的 \mathrm{} 包装
@@ -134,15 +139,16 @@ class MinerUPipelineEngine:
 
         # 4. 清洗 LaTeX 特殊字符
         # 将 ~ (LaTeX非换行空格) 替换为普通空格
+        # 这一步能解决 ~cm 变成 cm 的问题
         text = text.replace('~', ' ')
         
         # 5. 去除模型幻觉产生的 <del> 标签
         text = text.replace('<del>', '').replace('</del>', '')
         
-        # 6. [新增] 简单的去重逻辑 (解决 117\n\n117 这种相邻重复数字/短语)
-        # 匹配逻辑：连续两个相同的单词/数字(长度>1)，中间由空白字符分隔，替换为单个
-        # 比如： "117  117" -> "117"
-        text = re.sub(r'(\b\w+\b)([\s\r\n]+)\1', r'\1', text)
+        # 6. [加强版] 暴力去重逻辑 
+        # 解决 117\n\n117 (数字重复) 和 SD+5\n\nSD+5 (带符号的短语重复)
+        # 逻辑：匹配任意非空字符块 (\S+)，后面跟着空白符，再跟着完全一样的字符块
+        text = re.sub(r'(\S+)([\s\r\n]+)\1', r'\1', text)
 
         # 7. 去除连续的多余空行 (保留最多两个换行)
         text = re.sub(r'\n{3,}', '\n\n', text)
