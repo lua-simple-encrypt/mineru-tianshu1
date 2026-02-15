@@ -4,11 +4,10 @@ MinerU Pipeline Engine
 使用 MinerU 处理 PDF 和图片
 
 修复说明：
-- [关键修复] 增加 HTML 反转义 (html.unescape)，修复 &lt; &gt; 等符号显示问题
-- [关键修复] 使用临时纯英文目录处理，彻底规避中文路径导致的写入失败
-- [增强] 修复 Markdown 内容为空时的自动恢复逻辑 (从 JSON 重建)
+- [核心修复] 增加深度文本清洗 (_clean_markdown)，解决 HTML 转义、LaTeX 过度包装和模型幻觉标签
+- [核心修复] 使用临时纯英文目录处理，规避中文路径问题
 - [增强] 增加 VLLM 服务健康检查与自动等待机制
-- [原有] 正确透传参数以启用加速
+- [增强] 修复 Markdown 内容为空时的自动恢复逻辑
 """
 
 import json
@@ -18,7 +17,8 @@ import tempfile
 import time
 import urllib.request
 import urllib.error
-import html  # <--- 【新增】用于 HTML 反转义
+import re        # <--- [新增] 正则表达式库
+import html      # <--- [新增] HTML转义库
 from pathlib import Path
 from typing import Optional, Dict, Any
 from threading import Lock
@@ -87,10 +87,7 @@ class MinerUPipelineEngine:
                 raise
 
     def _wait_for_server(self, server_url: str, timeout: int = 60) -> bool:
-        """
-        等待 VLLM 服务就绪
-        使用 urllib 标准库避免引入额外依赖
-        """
+        """等待 VLLM 服务就绪"""
         base_url = server_url.rstrip("/")
         if base_url.endswith("/v1"):
             base_url = base_url[:-3]
@@ -116,6 +113,27 @@ class MinerUPipelineEngine:
         logger.warning(f"⚠️  VLLM server wait timed out after {timeout}s. Process may fail.")
         return False
 
+    def _clean_markdown(self, text: str) -> str:
+        """
+        [关键功能] 深度清洗 Markdown 文本
+        解决 HTML 转义、LaTeX 过度包装和模型幻觉问题
+        """
+        if not text:
+            return ""
+
+        # 1. HTML 反转义 (解决 &gt; -> >)
+        text = html.unescape(text)
+
+        # 2. 去除 LaTeX 的 \mathrm{} 包装 (解决 \mathrm{LVEDd} -> LVEDd)
+        # 正则含义：找到 \mathrm{...}，只保留大括号里面的内容
+        # 使用非贪婪匹配 .*? 避免跨行匹配过多
+        text = re.sub(r'\\mathrm\{([^\}]+)\}', r'\1', text)
+
+        # 3. 去除模型幻觉产生的 <del> 标签 (解决 <del>cm)
+        text = text.replace('<del>', '').replace('</del>', '')
+
+        return text
+
     def cleanup(self):
         """清理显存"""
         try:
@@ -127,7 +145,7 @@ class MinerUPipelineEngine:
 
     def parse(self, file_path: str, output_path: str, options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        处理文件 (增强版：临时目录 + 服务等待 + HTML反转义)
+        处理文件 (增强版：临时目录 + 服务等待 + 深度清洗)
         """
         options = options or {}
         
@@ -137,9 +155,7 @@ class MinerUPipelineEngine:
         file_path_obj = Path(file_path)
         file_ext = file_path_obj.suffix.lower()
 
-        # =========================================================================
         # 1. 确定 Backend
-        # =========================================================================
         user_backend = options.get("parse_mode", "pipeline")
         if user_backend == "auto":
             user_backend = "pipeline"
@@ -162,9 +178,7 @@ class MinerUPipelineEngine:
         if "http-client" in backend and server_url:
             self._wait_for_server(server_url)
 
-        # =========================================================================
         # 2. 准备参数
-        # =========================================================================
         parse_method = options.get("method", "auto")
         if options.get("force_ocr"):
             parse_method = "ocr"
@@ -211,9 +225,7 @@ class MinerUPipelineEngine:
             lang = options.get("lang", "auto")
             if lang == "auto": lang = "ch"
 
-            # =================================================================
-            # 【核心修复】使用临时纯英文目录处理
-            # =================================================================
+            # 使用临时纯英文目录处理
             with tempfile.TemporaryDirectory(prefix="mineru_proc_") as temp_dir:
                 temp_work_dir = Path(temp_dir)
                 logger.info(f"🛠️  Working in temp directory: {temp_work_dir}")
@@ -244,9 +256,7 @@ class MinerUPipelineEngine:
                     f_dump_content_list=f_dump_content_list
                 )
 
-                # =============================================================
                 # 结果提取与搬运
-                # =============================================================
                 generated_result_dir = temp_work_dir / "result"
                 
                 if not generated_result_dir.exists():
@@ -260,7 +270,7 @@ class MinerUPipelineEngine:
                         else:
                              raise FileNotFoundError("Processing failed internally - No output generated")
 
-                # 1. 读取内容并进行 HTML 反转义
+                # 1. 读取内容并进行深度清洗
                 content = ""
                 json_content = None
                 
@@ -270,15 +280,15 @@ class MinerUPipelineEngine:
                     raw_content = md_file.read_text(encoding="utf-8")
                     
                     # =========================================================
-                    # 【关键修复】HTML 反转义
-                    # 解决 &gt; 显示为 > 的问题
+                    # 【核心修复】调用 _clean_markdown 进行深度清洗
+                    # 解决 &gt;, \mathrm{}, <del> 等问题
                     # =========================================================
-                    content = html.unescape(raw_content)
+                    content = self._clean_markdown(raw_content)
                     
-                    # 覆盖写入反转义后的内容，确保搬运过去的是正确版本
+                    # 覆盖写入清洗后的内容
                     md_file.write_text(content, encoding="utf-8")
                     
-                    logger.info(f"✅ Read and unescaped MD content: {len(content)} chars")
+                    logger.info(f"✅ Read and cleaned MD content: {len(content)} chars")
                 
                 temp_json_files = list(generated_result_dir.rglob("*_content_list.json"))
                 if temp_json_files:
@@ -294,8 +304,8 @@ class MinerUPipelineEngine:
                     if isinstance(json_content, list):
                         for block in json_content:
                             text = block.get("text", "")
-                            # 恢复时也做反转义
-                            text = html.unescape(text)
+                            # 恢复时也做清洗
+                            text = self._clean_markdown(text)
                             recovered_text.append(text)
                     content = "\n\n".join(recovered_text)
                     
@@ -322,7 +332,7 @@ class MinerUPipelineEngine:
                 final_mds = list(final_output_dir.rglob("*.md"))
                 if final_mds:
                     final_md_path = str(final_mds[0])
-                    # 覆盖写入反转义后的内容 (双重保险)
+                    # 覆盖写入清洗后的内容 (双重保险)
                     Path(final_md_path).write_text(content, encoding="utf-8")
                 
                 final_jsons = list(final_output_dir.rglob("*_content_list.json"))
