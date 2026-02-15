@@ -692,6 +692,7 @@ class MinerUWorkerAPI(ls.LitAPI):
                 if not PADDLEOCR_VL_AVAILABLE:
                     raise ValueError("PaddleOCR-VL engine is not available")
                 logger.info(f"🔍 Processing with PaddleOCR-VL: {file_path}")
+                # 动态解包传入完整的高级选项，确保引擎能接收到 shape, temperature, pixels等全量配置
                 result = self._process_with_paddleocr_vl(file_path, options)
 
             # 5. 用户指定了 PaddleOCR-VL-VLLM
@@ -703,6 +704,7 @@ class MinerUWorkerAPI(ls.LitAPI):
                 ):
                     raise ValueError("PaddleOCR-VL-VLLM engine is not available")
                 logger.info(f"🔍 Processing with PaddleOCR-VL-VLLM: {file_path}")
+                # 同理透传完整的高级 options
                 result = self._process_with_paddleocr_vl_vllm(file_path, options)
             
             # 6. 用户指定了 MinerU 的某种模式 (pipeline, vlm-*, hybrid-*)
@@ -1054,7 +1056,7 @@ class MinerUWorkerAPI(ls.LitAPI):
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # 处理文件（parse 方法需要 output_path）
-        # 【关键修改】传递 **options 给 parse 方法
+        # 【关键修改】传递 **options 给 parse 方法，透传所有高级生成与排版参数
         result = self.paddleocr_vl_engine.parse(file_path, output_path=str(output_dir), **options)
 
         # 规范化输出（统一文件名和目录结构）
@@ -1092,7 +1094,7 @@ class MinerUWorkerAPI(ls.LitAPI):
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # 处理文件（parse 方法需要 output_path）
-        # 【关键修改】传递 **options 给 parse 方法
+        # 【关键修改】传递 **options 给 parse 方法，透传所有高级生成与排版参数
         result = self.paddleocr_vl_vllm_engine.parse(file_path, output_path=str(output_dir), **options)
 
         # 规范化输出（统一文件名和目录结构）
