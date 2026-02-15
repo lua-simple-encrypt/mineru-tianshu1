@@ -122,12 +122,14 @@ class MinerUPipelineEngine:
             return ""
 
         # 1. HTML 反转义 (解决 &gt; -> >)
+        # 必须先执行，因为有时候 &gt; 可能被包裹在 \mathrm{} 中
         text = html.unescape(text)
 
         # 2. 去除 LaTeX 的 \mathrm{} 包装 (解决 \mathrm{LVEDd} -> LVEDd)
-        # 正则含义：找到 \mathrm{...}，只保留大括号里面的内容
-        # 使用非贪婪匹配 .*? 避免跨行匹配过多
-        text = re.sub(r'\\mathrm\{([^\}]+)\}', r'\1', text)
+        # 修改说明：
+        # - 使用 (.*?) 非贪婪匹配，避免 [^\}]+ 无法匹配空内容或跨度过大的问题
+        # - 添加 re.DOTALL 标志，确保 . 可以匹配换行符，处理跨行的 \mathrm{...}
+        text = re.sub(r'\\mathrm\{(.*?)\}', r'\1', text, flags=re.DOTALL)
 
         # 3. 去除模型幻觉产生的 <del> 标签 (解决 <del>cm)
         text = text.replace('<del>', '').replace('</del>', '')
