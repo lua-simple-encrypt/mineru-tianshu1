@@ -188,8 +188,8 @@ services:
       --trust-remote-code
       --host 0.0.0.0
       --port 30023
-      --gpu-memory-utilization 0.7
-      --max-model-len 16384
+      --gpu-memory-utilization 0.90
+      --max-model-len 8192
       --enforce-eager
       --limit-mm-per-prompt image=10
     shm_size: 32gb
@@ -234,7 +234,7 @@ services:
       --trust-remote-code
       --host 0.0.0.0
       --port 30024
-      --gpu-memory-utilization 0.7
+      --gpu-memory-utilization 0.90
       --max-model-len 8192
       --enforce-eager
       --limit-mm-per-prompt image=10
