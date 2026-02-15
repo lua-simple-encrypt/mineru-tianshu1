@@ -4,13 +4,16 @@ MinerU Pipeline Engine
 使用 MinerU 处理 PDF 和图片
 
 修复说明：
-- 强制使用安全文件名 'result.pdf' 进行内部处理，解决中文文件名导致的路径问题
-- 增加 .json 结果查找作为 .md 缺失时的降级方案
-- 增加 layout.pdf 存在的容错处理
+- [关键] 使用临时纯英文目录进行处理，彻底规避中文路径导致的写入失败/内容为空问题
+- [关键] 修复 Markdown 内容为空时的自动恢复逻辑 (从 JSON 重建)
+- [修复] 强制使用安全文件名 'result.pdf' 进行内部处理
+- [修复] 正确透传 backend/server_url 参数以启用 VLLM 加速
 """
 
 import json
 import os
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Optional, Dict, Any
 from threading import Lock
@@ -89,17 +92,19 @@ class MinerUPipelineEngine:
 
     def parse(self, file_path: str, output_path: str, options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        处理文件
+        处理文件 (增强版：使用临时目录规避路径问题)
         """
         options = options or {}
-        output_dir = Path(output_path)
-        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 用户指定的最终输出目录 (可能包含中文)
+        final_output_dir = Path(output_path)
+        final_output_dir.mkdir(parents=True, exist_ok=True)
 
         file_path_obj = Path(file_path)
         file_ext = file_path_obj.suffix.lower()
 
         # =========================================================================
-        # 1. 确定 Backend
+        # 1. 确定 Backend (处理模式)
         # =========================================================================
         user_backend = options.get("parse_mode", "pipeline")
         if user_backend == "auto":
@@ -108,7 +113,7 @@ class MinerUPipelineEngine:
         backend = user_backend
         server_url = options.get("server_url")
 
-        # 智能切换 VLLM
+        # 智能切换 VLLM 加速
         if not server_url and self.vlm_api_base:
             if user_backend == "vlm-auto-engine":
                 backend = "vlm-http-client"
@@ -130,7 +135,7 @@ class MinerUPipelineEngine:
         formula_enable = options.get("formula_enable", True)
         table_enable = options.get("table_enable", True)
         
-        # 输出控制
+        # 输出控制 (默认开启以确保调试文件生成)
         f_draw_layout_bbox = options.get("draw_layout_bbox", True)      
         f_draw_span_bbox = options.get("draw_span_bbox", True)          
         f_dump_md = options.get("dump_markdown", True)                  
@@ -140,20 +145,24 @@ class MinerUPipelineEngine:
         f_dump_orig_pdf = options.get("dump_orig_pdf", True)            
 
         # 页面范围
-        start_page_id = options.get("start_page_id", options.get("start_page", 0))
-        end_page_id = options.get("end_page_id", options.get("end_page", None))
+        start_page_id = options.get("start_page_id", 0)
+        end_page_id = options.get("end_page_id", None)
         
-        if start_page_id is None: start_page_id = 0
-        else: start_page_id = int(start_page_id)
+        try: start_page_id = int(start_page_id)
+        except: start_page_id = 0
         
-        if end_page_id == -1 or str(end_page_id).strip() == "": end_page_id = None
-        elif end_page_id is not None: end_page_id = int(end_page_id)
+        try: 
+            if end_page_id is not None and str(end_page_id).strip() != "": 
+                end_page_id = int(end_page_id)
+                if end_page_id == -1: end_page_id = None
+            else: end_page_id = None
+        except: end_page_id = None
 
         # 加载引擎
         do_parse_func = self._load_pipeline()
 
         try:
-            # 读取文件
+            # 读取源文件
             with open(file_path, "rb") as f:
                 file_bytes = f.read()
 
@@ -167,122 +176,145 @@ class MinerUPipelineEngine:
             else:
                 pdf_bytes = file_bytes
 
-            # 语言设置
             lang = options.get("lang", "auto")
             if lang == "auto": lang = "ch"
 
             # =================================================================
-            # 【关键修复】使用安全文件名
+            # 【核心修复】使用临时纯英文目录处理
             # =================================================================
-            # 无论原文件名是什么（中文/特殊字符），内部处理时统一命名为 'result.pdf'
-            # 这能避免 MinerU 内部处理路径时的编码问题
-            safe_file_name = "result.pdf"
-            logger.info(f"🚀 Processing as internal name: {safe_file_name}")
-
-            # 调用 MinerU
-            do_parse_func(
-                output_dir=str(output_dir),
-                pdf_file_names=[safe_file_name],  # 使用安全文件名
-                pdf_bytes_list=[pdf_bytes],
-                p_lang_list=[lang],
+            # 创建临时目录，确保路径不含任何中文或特殊字符
+            # 这能彻底解决 MinerU 底层库因为路径编码问题导致的写入失败或空文件
+            with tempfile.TemporaryDirectory(prefix="mineru_proc_") as temp_dir:
+                temp_work_dir = Path(temp_dir)
+                logger.info(f"🛠️  Working in temp directory: {temp_work_dir}")
                 
-                backend=backend,
-                parse_method=parse_method,
-                server_url=server_url,
+                # 强制使用安全文件名
+                safe_file_name = "result.pdf"
                 
-                start_page_id=start_page_id,
-                end_page_id=end_page_id,
-                formula_enable=formula_enable,
-                table_enable=table_enable,
+                # 调用 MinerU 处理
+                do_parse_func(
+                    output_dir=str(temp_work_dir), # 输出到临时目录
+                    pdf_file_names=[safe_file_name],
+                    pdf_bytes_list=[pdf_bytes],
+                    p_lang_list=[lang],
+                    
+                    # 关键参数透传
+                    backend=backend,
+                    parse_method=parse_method,
+                    server_url=server_url,
+                    
+                    start_page_id=start_page_id,
+                    end_page_id=end_page_id,
+                    formula_enable=formula_enable,
+                    table_enable=table_enable,
+                    
+                    f_draw_layout_bbox=f_draw_layout_bbox,
+                    f_draw_span_bbox=f_draw_span_bbox,
+                    f_dump_md=f_dump_md,
+                    f_dump_middle_json=f_dump_middle_json,
+                    f_dump_model_output=f_dump_model_output,
+                    f_dump_orig_pdf=f_dump_orig_pdf,
+                    f_dump_content_list=f_dump_content_list
+                )
+
+                # =============================================================
+                # 结果提取与搬运
+                # =============================================================
+                # MinerU 输出结构: {temp_work_dir}/result/auto/result.md
+                # 注意：result 来自 safe_file_name 的 stem
+                generated_result_dir = temp_work_dir / "result"
                 
-                f_draw_layout_bbox=f_draw_layout_bbox,
-                f_draw_span_bbox=f_draw_span_bbox,
-                f_dump_md=f_dump_md,
-                f_dump_middle_json=f_dump_middle_json,
-                f_dump_model_output=f_dump_model_output,
-                f_dump_orig_pdf=f_dump_orig_pdf,
-                f_dump_content_list=f_dump_content_list
-            )
+                if not generated_result_dir.exists():
+                    logger.error("❌ MinerU failed to generate output directory in temp workspace")
+                    raise FileNotFoundError("Processing failed internally")
 
-            # =================================================================
-            # 结果查找逻辑 (增强版)
-            # =================================================================
-            # MinerU 输出结构: {output_dir}/{safe_file_name}/auto/{safe_file_stem}.md
-            # 例如: /app/data/output/.../result.pdf/auto/result.md
-            
-            # 1. 查找 Markdown
-            md_files = list(output_dir.rglob("*.md"))
-            
-            # 2. 查找 Content JSON (降级)
-            json_files = list(output_dir.rglob("*_content_list.json"))
-            
-            # 3. 查找 Layout PDF (底线)
-            layout_files = list(output_dir.rglob("*_layout.pdf"))
-
-            content = ""
-            actual_output_dir = None
-            json_path = None
-            json_content = None
-            md_path = None
-
-            # 优先级 1: Markdown 存在
-            if md_files:
-                md_file = md_files[0]
-                actual_output_dir = md_file.parent
-                content = md_file.read_text(encoding="utf-8")
-                md_path = str(md_file)
-                logger.info(f"✅ Found MinerU MD output: {md_file.name}")
-
-            # 优先级 2: JSON 存在 (MD 缺失)
-            elif json_files:
-                json_file = json_files[0]
-                actual_output_dir = json_file.parent
-                json_path = str(json_file)
-                logger.warning(f"⚠️  MD missing, falling back to JSON: {json_file.name}")
+                # 1. 在临时目录中读取内容 (此时路径绝对安全)
+                content = ""
+                json_content = None
                 
-                try:
-                    with open(json_file, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                        json_content = data
-                    # 简单尝试从 JSON 恢复文本
-                    if isinstance(data, list):
-                        content = "\n\n".join([b.get("text", "") for b in data if "text" in b])
-                        logger.info("ℹ️  Recovered text from JSON content list")
-                except Exception as e:
-                    logger.error(f"❌ Failed to parse JSON: {e}")
-
-            # 优先级 3: Layout PDF 存在 (文本识别完全失败)
-            elif layout_files:
-                layout_file = layout_files[0]
-                # 这里的 parent 通常是 auto/ 目录
-                actual_output_dir = layout_file.parent
-                logger.warning(f"⚠️  Text extraction failed (no MD/JSON), but layout analysis succeeded: {layout_file.name}")
-                content = "> ⚠️ Text extraction failed. Please check the layout visualization PDF in the output directory."
-            
-            else:
-                # 彻底失败
-                logger.error("❌ MinerU output directory structure:")
-                for item in output_dir.rglob("*"):
-                    logger.error(f"   {item}")
-                raise FileNotFoundError(f"MinerU failed to generate any recognizable output in: {output_dir}")
-
-            # 尝试补充 JSON 信息 (如果之前没加载)
-            if actual_output_dir and not json_content:
-                jsons = list(actual_output_dir.glob("*_content_list.json"))
-                if jsons:
-                    json_path = str(jsons[0])
+                # 查找 Markdown
+                temp_md_files = list(generated_result_dir.rglob("*.md"))
+                if temp_md_files:
+                    md_file = temp_md_files[0]
+                    content = md_file.read_text(encoding="utf-8")
+                    logger.info(f"✅ Read MD content: {len(content)} chars")
+                
+                # 查找 JSON
+                temp_json_files = list(generated_result_dir.rglob("*_content_list.json"))
+                if temp_json_files:
                     try:
-                        with open(jsons[0], "r", encoding="utf-8") as f:
+                        with open(temp_json_files[0], "r", encoding="utf-8") as f:
                             json_content = json.load(f)
                     except: pass
 
-            return {
-                "markdown": content,
-                "result_path": str(actual_output_dir) if actual_output_dir else str(output_dir),
-                "json_path": json_path,
-                "json_content": json_content,
-                "markdown_file": md_path
-            }
+                # 【修复内容为空】如果 MD 为空，尝试从 JSON 恢复
+                if not content.strip() and json_content:
+                    logger.warning("⚠️  Markdown file is empty, attempting to recover text from JSON...")
+                    recovered_text = []
+                    if isinstance(json_content, list):
+                        for block in json_content:
+                            if "text" in block:
+                                recovered_text.append(block["text"])
+                    content = "\n\n".join(recovered_text)
+                    logger.info(f"ℹ️  Recovered {len(content)} chars from JSON")
+
+                # 2. 将结果文件搬运到用户指定的 final_output_dir
+                # 将 result/auto 下的所有文件复制过去
+                # 或者直接把 result 文件夹里的内容复制到 final_output_dir
+                logger.info(f"📦 Moving results to: {final_output_dir}")
+                
+                for src_path in generated_result_dir.rglob("*"):
+                    if src_path.is_file():
+                        # 计算相对路径，保持目录结构 (例如 auto/images/1.jpg)
+                        rel_path = src_path.relative_to(generated_result_dir)
+                        dest_path = final_output_dir / rel_path
+                        
+                        # 确保目标父目录存在
+                        dest_path.parent.mkdir(parents=True, exist_ok=True)
+                        
+                        # 复制文件
+                        shutil.copy2(src_path, dest_path)
+
+                # =============================================================
+                # 返回最终结果路径
+                # =============================================================
+                # 重新定位最终目录下的关键文件
+                final_md_path = None
+                final_json_path = None
+                
+                # 查找最终目录下的 MD
+                final_mds = list(final_output_dir.rglob("*.md"))
+                if final_mds:
+                    final_md_path = str(final_mds[0])
+                
+                # 查找最终目录下的 JSON
+                final_jsons = list(final_output_dir.rglob("*_content_list.json"))
+                if final_jsons:
+                    final_json_path = str(final_jsons[0])
+
+                if not content.strip():
+                    # 最后一道防线：检查是否有布局 PDF
+                    layout_pdfs = list(final_output_dir.rglob("*_layout.pdf"))
+                    if layout_pdfs:
+                        content = "> ⚠️ Text extraction returned empty content. Please check layout PDF."
+                        logger.warning("⚠️  Returning empty content warning.")
+                    else:
+                        raise FileNotFoundError("No valid content generated.")
+
+                return {
+                    "markdown": content,
+                    "result_path": str(final_output_dir),
+                    "markdown_file": final_md_path,
+                    "json_path": final_json_path,
+                    "json_content": json_content
+                }
+
+        except Exception as e:
+            logger.error(f"❌ Pipeline processing failed: {e}")
+            # 尝试打印错误堆栈
+            import traceback
+            logger.debug(traceback.format_exc())
+            raise
 
         finally:
             self.cleanup()
