@@ -12,6 +12,7 @@ import json
 import os
 import re
 import uuid
+import shutil  # ✅ [新增] 用于删除非空目录
 import mimetypes  # ✅ [新增] 用于自动识别文件类型
 from datetime import datetime
 from pathlib import Path
@@ -454,6 +455,8 @@ async def get_task_status(
     if not task.get("is_parent"):
         response["worker_id"] = task.get("worker_id")
         response["retry_count"] = task.get("retry_count")
+        # 兼容新增的 cleared 字段
+        response["result_path"] = task.get("result_path")
 
     if task.get("is_parent"):
         child_count = task.get("child_count", 0)
@@ -479,7 +482,7 @@ async def get_task_status(
             logger.warning(f"⚠️  Failed to load subtasks: {e}")
 
     if task["status"] == "completed":
-        if not task["result_path"]:
+        if not task["result_path"] or task["result_path"] == "CLEARED":
             response["data"] = None
             response["message"] = "Task completed but result files have been cleaned up"
             return response
@@ -584,13 +587,129 @@ async def cancel_task(task_id: str, current_user: User = Depends(get_current_act
 
     if task["status"] == "pending":
         db.update_task_status(task_id, "cancelled")
-        file_path = Path(task["file_path"])
-        if file_path.exists():
-            file_path.unlink()
+        # 尝试清理上传的文件（可选）
+        if task.get("file_path"):
+            file_path = Path(task["file_path"])
+            if file_path.exists():
+                try:
+                    file_path.unlink()
+                except Exception:
+                    pass
         logger.info(f"⏹️  Task cancelled: {task_id} by user {current_user.username}")
         return {"success": True, "message": "Task cancelled successfully"}
     else:
         raise HTTPException(status_code=400, detail=f"Cannot cancel task in {task['status']} status")
+
+
+# ========================================================================
+# 新增任务管理接口：重试、暂停/恢复、清理
+# ========================================================================
+
+@router.post("/tasks/{task_id}/retry", tags=["任务管理"])
+async def retry_task(task_id: str, current_user: User = Depends(get_current_active_user)):
+    """
+    重试失败的任务
+    """
+    task = db.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+        
+    # 权限检查：只能重试自己的任务，或者是管理员
+    if not current_user.has_permission(Permission.TASK_MANAGE_ALL):
+         if task.get("user_id") != current_user.user_id:
+            raise HTTPException(status_code=403, detail="Permission denied")
+
+    if db.retry_task(task_id):
+        # 重试时，如果之前的输出目录存在，清理掉避免数据混淆
+        output_dir = OUTPUT_DIR / task_id
+        if output_dir.exists():
+            try:
+                shutil.rmtree(output_dir)
+            except Exception as e:
+                logger.warning(f"Warning: Failed to clean up output directory for retried task {task_id}: {e}")
+        
+        return {"success": True, "message": "Task submitted for retry"}
+    
+    raise HTTPException(status_code=404, detail="Task not found")
+
+
+@router.delete("/tasks/failed/clear", tags=["任务管理"])
+async def clear_failed_tasks_endpoint(current_user: User = Depends(require_permission(Permission.TASK_DELETE_ALL))):
+    """
+    一键清理所有失败的任务 (仅管理员可用，防止普通用户误删)
+    """
+    # 1. 数据库层面清理
+    deleted_count = db.clear_failed_tasks()
+    
+    return {"success": True, "deleted_count": deleted_count}
+
+
+@router.post("/tasks/{task_id}/pause", tags=["任务管理"])
+async def pause_task_endpoint(task_id: str, current_user: User = Depends(get_current_active_user)):
+    """
+    暂停任务 (仅 Pending 状态有效)
+    """
+    task = db.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+        
+    if not current_user.has_permission(Permission.TASK_MANAGE_ALL):
+         if task.get("user_id") != current_user.user_id:
+            raise HTTPException(status_code=403, detail="Permission denied")
+
+    if db.pause_task(task_id):
+        return {"success": True, "message": "Task paused"}
+    
+    raise HTTPException(status_code=409, detail="Task cannot be paused (must be in pending status)")
+
+
+@router.post("/tasks/{task_id}/resume", tags=["任务管理"])
+async def resume_task_endpoint(task_id: str, current_user: User = Depends(get_current_active_user)):
+    """
+    恢复任务 (仅 Paused 状态有效)
+    """
+    task = db.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+        
+    if not current_user.has_permission(Permission.TASK_MANAGE_ALL):
+         if task.get("user_id") != current_user.user_id:
+            raise HTTPException(status_code=403, detail="Permission denied")
+
+    if db.resume_task(task_id):
+        return {"success": True, "message": "Task resumed"}
+    
+    raise HTTPException(status_code=409, detail="Task cannot be resumed (must be in paused status)")
+
+
+@router.post("/tasks/{task_id}/clear-cache", tags=["任务管理"])
+async def clear_task_cache_endpoint(task_id: str, current_user: User = Depends(get_current_active_user)):
+    """
+    清理任务缓存：删除 output 文件夹，保留数据库记录
+    """
+    task = db.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    # 权限检查：只能清理自己的任务，或者是管理员
+    if not current_user.has_permission(Permission.TASK_DELETE_ALL):
+         if task.get("user_id") != current_user.user_id:
+            raise HTTPException(status_code=403, detail="Permission denied")
+
+    # 1. 删除磁盘文件
+    output_dir = OUTPUT_DIR / task_id
+    if output_dir.exists():
+        try:
+            shutil.rmtree(output_dir)
+        except Exception as e:
+            # 如果删除失败（例如权限问题），返回 500
+            raise HTTPException(status_code=500, detail=f"Failed to delete files: {str(e)}")
+    
+    # 2. 更新数据库状态
+    if db.clear_task_cache(task_id):
+        return {"success": True, "message": "Task cache cleared, space freed"}
+    
+    raise HTTPException(status_code=404, detail="Task not found")
 
 
 @router.get("/queue/stats", tags=["队列管理"])
