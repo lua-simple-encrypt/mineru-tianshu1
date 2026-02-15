@@ -7,11 +7,14 @@ PaddleOCR-VL-VLLM 解析引擎
 
 重要提示：
 - PaddleOCR-VL-VLLM 仅支持 GPU 推理，不支持 CPU 及 Arm 架构
-- GPU 要求：Compute Capability ≥ 8.5 (RTX 3090, A10, A100, H100 等)
+- GPU 要求：Compute Capability >= 8.5 (RTX 3090, A10, A100, H100 等)
 - 支持本地模型加载（/root/.paddlex/official_models/）或自动下载
 """
 
 import os
+import gc
+import json
+import traceback
 from pathlib import Path
 from typing import Optional, Dict, Any
 from threading import Lock
@@ -30,9 +33,11 @@ class PaddleOCRVLVLLMEngine:
     - 原生支持 PDF 多页文档解析
     - 结构化输出（Markdown/JSON）
     - 模型自动下载和缓存（支持持久化挂载）
+    - 内存优化：使用生成器流式处理长文档，防止 OOM
+    - 参数支持：支持 PaddleOCR-VL-1.5 的全量高级参数配置
 
     GPU 要求：
-    - NVIDIA GPU with Compute Capability ≥ 8.5
+    - NVIDIA GPU with Compute Capability >= 8.5
     - 推荐：RTX 3090, RTX 4090, A10, A100, H100
     """
 
@@ -121,7 +126,7 @@ class PaddleOCRVLVLLMEngine:
                 cc_minor = compute_capability[1]
                 if cc_major < 8 or (cc_major == 8 and cc_minor < 5):
                     logger.info("ℹ️  GPU Compute Capability < 8.5")
-                    logger.info("   Official recommendation: CC ≥ 8.5 for best performance")
+                    logger.info("   Official recommendation: CC >= 8.5 for best performance")
                     logger.info("   Your GPU may still work, but performance might vary")
             except Exception as e:
                 logger.debug(f"Could not get detailed GPU info: {e}")
@@ -159,11 +164,7 @@ class PaddleOCRVLVLLMEngine:
                     raise ValueError("vllm_api_base cannot be None for VLLM engine")
 
                 logger.info("🤖 Initializing PaddleOCR-VL-VLLM with enhanced features...")
-                logger.info("   ✅ Document Orientation Classification: Enabled")
-                logger.info("   ✅ Document Unwarping (Text Correction): Enabled")
-                logger.info("   ✅ Layout Detection & Sorting: Enabled")
-                logger.info("   ✅ Auto Multi-Language Recognition: Enabled (109+ languages)")
-
+                
                 # =========================================================================
                 # 智能路径解析逻辑 (适配 Docker 持久化挂载)
                 # =========================================================================
@@ -183,11 +184,8 @@ class PaddleOCRVLVLLMEngine:
                     logger.info("   Will attempt auto-download...")
 
                 # 初始化 PaddleOCRVL
-                # 注意：PaddleOCRVL 内部会使用 PADDLEX_HOME 环境变量来决定下载/加载位置
+                # (预测时的高级参数将通过 predict(**kwargs) 传递)
                 self._pipeline = PaddleOCRVL(
-                    use_doc_orientation_classify=True,  # 文档方向分类
-                    use_doc_unwarping=True,             # 文本图像矫正
-                    use_layout_detection=True,          # 版面区域检测
                     vl_rec_backend="vllm-server",       # 使用 VLLM 后端
                     vl_rec_server_url=self.vllm_api_base, # VLLM 服务器地址
                 )
@@ -195,7 +193,6 @@ class PaddleOCRVLVLLMEngine:
                 logger.info("=" * 60)
                 logger.info("✅ PaddleOCR-VL-VLLM Pipeline loaded successfully!")
                 logger.info(f"   Device: GPU {self.gpu_id}")
-                logger.info("   Features: Orientation correction, Text unwarping, Layout detection")
                 logger.info("=" * 60)
 
                 return self._pipeline
@@ -254,7 +251,7 @@ class PaddleOCRVLVLLMEngine:
         Args:
             file_path: 输入文件路径
             output_path: 输出目录
-            **kwargs: 其他参数
+            **kwargs: 其他高级控制参数
 
         Returns:
             解析结果（同时保存 Markdown 和 JSON 两种格式）
@@ -269,56 +266,124 @@ class PaddleOCRVLVLLMEngine:
         # 加载管道
         pipeline = self._load_pipeline()
 
-        # 执行推理
+        # 参数映射表 (API 驼峰 -> PaddleX 下划线)
+        param_mapping = {
+            "useDocOrientationClassify": "use_doc_orientation_classify",
+            "useDocUnwarping": "use_doc_unwarping",
+            "useLayoutDetection": "use_layout_parsing",
+            "useChartRecognition": "use_chart_recognition",
+            "useSealRecognition": "use_seal_recognition",
+            "useOcrForImageBlock": "use_ocr_for_image_block",
+            "layoutNms": "layout_nms",
+            "markdownIgnoreLabels": "markdown_ignore_labels",
+            "mergeTables": "merge_tables",
+            "relevelTitles": "relevel_titles",
+            "restructurePages": "restructure_pages",
+            "layoutShapeMode": "layout_shape_mode",
+            "minPixels": "min_pixels",
+            "maxPixels": "max_pixels",
+            "promptLabel": "prompt_label", 
+            "temperature": "temperature",
+            "topP": "top_p",
+            "repetitionPenalty": "repetition_penalty"
+        }
+
+        # 规范化参数并过滤天枢其他无关参数
+        predict_params = {}
+        for k, v in kwargs.items():
+            if k in param_mapping:
+                predict_params[param_mapping[k]] = v
+
         try:
-            logger.info("🚀 开始使用 PaddleOCR-VL-VLLM 识别...")
-            logger.info(f"   输入文件: {file_path}")
-            logger.info("   自动语言检测: 支持 109+ 语言")
+            # 动态检查预处理模块是否支持
+            has_preprocessor = hasattr(pipeline, "doc_preprocessor_pipeline") and pipeline.doc_preprocessor_pipeline is not None
+            req_orientation = predict_params.get("use_doc_orientation_classify", False)
+            req_unwarping = predict_params.get("use_doc_unwarping", False)
 
-            # PaddleOCR-VL-VLLM 的 predict 方法
-            result = pipeline.predict(str(file_path))
+            if (req_orientation or req_unwarping) and not has_preprocessor:
+                logger.warning("⚠️ 请求了文档矫正/分类，但模型缺少预处理模块。已自动禁用以防止崩溃。")
+                predict_params["use_doc_orientation_classify"] = False
+                predict_params["use_doc_unwarping"] = False
 
-            logger.info("✅ PaddleOCR-VL-VLLM completed")
-            logger.info(f"   识别了 {len(result)} 页/张")
+            # 设置输入和基本默认值
+            predict_params["input"] = str(file_path)
+            if "use_layout_parsing" not in predict_params: predict_params["use_layout_parsing"] = True
+            if "use_doc_orientation_classify" not in predict_params: predict_params["use_doc_orientation_classify"] = False
+            if "use_doc_unwarping" not in predict_params: predict_params["use_doc_unwarping"] = False
 
-            # 处理结果
-            markdown_list = []
+            log_params = {k: v for k, v in predict_params.items() if k != "input"}
+            logger.info(f"🚀 开始使用 PaddleOCR-VL-VLLM 识别 (参数: {json.dumps(log_params, default=str, ensure_ascii=False)})")
+
+            # 执行推理 (使用流式生成器防止长文档 OOM)
+            output_generator = pipeline.predict(**predict_params)
+
+            markdown_pages = []
+            markdown_list_obj = [] # 用于保存原始 markdown 对象以便进行官方合并
             json_list = []
+            page_count = 0
 
-            for idx, res in enumerate(result, 1):
-                logger.info(f"📝 处理结果 {idx}/{len(result)}")
+            for res in output_generator:
+                page_count += 1
+                logger.info(f"📝 处理结果 第 {page_count} 页")
+                page_output_dir = output_path / f"page_{page_count}"
+                page_output_dir.mkdir(parents=True, exist_ok=True)
 
-                try:
-                    page_output_dir = output_path / f"page_{idx}"
-                    page_output_dir.mkdir(parents=True, exist_ok=True)
+                # 保存文件
+                if hasattr(res, "save_to_img"): res.save_to_img(str(page_output_dir))
+                if hasattr(res, "save_to_json"): res.save_to_json(str(page_output_dir))
 
-                    if hasattr(res, "save_to_json"):
-                        res.save_to_json(save_path=str(page_output_dir))
-                    
-                    if hasattr(res, "save_to_markdown"):
-                        res.save_to_markdown(save_path=str(page_output_dir))
+                # 收集 JSON 对象
+                if hasattr(res, "json"):
+                    json_list.append(res.json)
 
-                    if hasattr(res, "markdown"):
-                        md_info = res.markdown
-                        markdown_list.append(md_info)
-                    
-                    if hasattr(res, "json"):
-                        json_list.append(res.json)
+                # 收集 Markdown 对象和字符串
+                if hasattr(res, "markdown") and res.markdown:
+                    markdown_list_obj.append(res.markdown)
+                
+                # 健壮提取当前页 Markdown
+                page_md = ""
+                if hasattr(res, "markdown") and res.markdown:
+                    if isinstance(res.markdown, dict):
+                        page_md = res.markdown.get('markdown_texts', '') or res.markdown.get('text', '')
+                    elif hasattr(res.markdown, 'markdown_texts'):
+                        page_md = res.markdown.markdown_texts
+                    elif isinstance(res.markdown, str):
+                        page_md = res.markdown
+                    else:
+                        page_md = str(res.markdown)
+                elif hasattr(res, "str") and res.str:
+                    page_md = str(res.str)
 
-                except Exception as e:
-                    logger.warning(f"   处理出错: {e}")
+                # 兜底文件读取
+                if not page_md and hasattr(res, "save_to_markdown"):
+                    try:
+                        res.save_to_markdown(str(page_output_dir))
+                        saved_mds = list(page_output_dir.glob("*.md"))
+                        if saved_mds:
+                            page_md = saved_mds[0].read_text(encoding="utf-8")
+                    except Exception:
+                        pass
+
+                if page_md:
+                    markdown_pages.append(page_md)
+                else:
+                    logger.warning(f"⚠️ Page {page_count}: No markdown content extracted.")
+
+            logger.info(f"✅ PaddleOCR-VL-VLLM completed, Processed {page_count} pages")
 
             # 合并 Markdown
-            if hasattr(pipeline, "concatenate_markdown_pages") and markdown_list:
+            markdown_text = ""
+            if hasattr(pipeline, "concatenate_markdown_pages") and markdown_list_obj:
                 try:
-                    markdown_text = pipeline.concatenate_markdown_pages(markdown_list)
+                    markdown_text = pipeline.concatenate_markdown_pages(markdown_list_obj)
                     logger.info("   使用官方 concatenate_markdown_pages() 方法合并")
-                except Exception:
-                     markdown_text = "\n\n---\n\n".join([str(m) for m in markdown_list])
+                except Exception as e:
+                    logger.warning(f"官方合并方法失败: {e}, 自动回退到常规拼接")
+                    markdown_text = "\n\n---\n\n".join(markdown_pages)
             else:
-                markdown_text = "\n\n---\n\n".join([str(m) for m in markdown_list])
+                markdown_text = "\n\n---\n\n".join(markdown_pages)
 
-            # 保存结果
+            # 保存最终结果
             markdown_file = output_path / "result.md"
             markdown_file.write_text(markdown_text, encoding="utf-8")
             logger.info(f"📄 Markdown 已保存: {markdown_file}")
@@ -326,7 +391,7 @@ class PaddleOCRVLVLLMEngine:
             json_file = output_path / "result.json"
             if json_list:
                 import json as json_lib
-                combined_json = {"pages": json_list, "total_pages": len(result)}
+                combined_json = {"pages": json_list, "total_pages": page_count}
                 with open(json_file, "w", encoding="utf-8") as f:
                     json_lib.dump(combined_json, f, ensure_ascii=False, indent=2)
                 logger.info(f"📄 JSON 已保存: {json_file}")
@@ -341,8 +406,7 @@ class PaddleOCRVLVLLMEngine:
 
         except Exception as e:
             logger.error(f"❌ OCR 解析失败: {e}")
-            import traceback
-            logger.debug(traceback.format_exc())
+            logger.error(traceback.format_exc())
             raise
 
         finally:
