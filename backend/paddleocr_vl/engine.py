@@ -1,39 +1,41 @@
 """
-PaddleOCR-VL 解析引擎
+PaddleOCR-VL 解析引擎 (PaddleX v3 Wrapper)
 单例模式，每个进程只加载一次模型
-使用最新的 PaddleOCR-VL API（自动多语言识别）
+支持自动多语言识别、Markdown 格式输出
 
 参考文档：http://www.paddleocr.ai/main/version3.x/pipeline_usage/PaddleOCR-VL.html
-
-重要提示：
-- PaddleOCR-VL 仅支持 GPU 推理，不支持 CPU 及 Arm 架构
-- GPU 要求：Compute Capability ≥ 8.5 (RTX 3090, A10, A100, H100 等)
-- 支持本地模型加载（/app/models/paddlex/）或自动下载（持久化到 /root/.paddlex）
 """
 
 import os
+import sys
+import gc
+import json
+import time
+import traceback
 from pathlib import Path
 from typing import Optional, Dict, Any
 from threading import Lock
-import time
 from loguru import logger
+
+# 尝试导入 paddle 和 paddlex
+try:
+    import paddle
+    from paddlex import create_pipeline
+    PADDLE_AVAILABLE = True
+except ImportError:
+    PADDLE_AVAILABLE = False
+    logger.warning("⚠️ PaddlePaddle or PaddleX not installed. Please install: pip install paddlepaddle-gpu paddlex")
 
 class PaddleOCRVLEngine:
     """
-    PaddleOCR-VL 解析引擎（新版本）
+    PaddleOCR-VL 解析引擎（基于 PaddleX v3）
 
     特性：
-    - 单例模式（每个进程只加载一次模型）
-    - 自动多语言识别（无需指定语言，支持 109+ 语言）
-    - 线程安全
-    - 仅支持 GPU 推理（不支持 CPU）
-    - 原生支持 PDF 多页文档
-    - 结构化输出（Markdown/JSON）
-    - 支持加载本地模型缓存，避免重复下载
-
-    GPU 要求：
-    - NVIDIA GPU with Compute Capability ≥ 8.5
-    - 推荐：RTX 3090, RTX 4090, A10, A100, H100
+    - 单例模式：确保进程内只有一个模型实例
+    - 显存管理：支持推理后清理显存
+    - 格式支持：输出 Markdown 和 JSON
+    - 兼容性修复：自动处理 doc_preprocessor_pipeline 缺失问题
+    - 参数支持：支持 PaddleOCR-VL-1.5 的全量参数配置
     """
 
     _instance: Optional["PaddleOCRVLEngine"] = None
@@ -49,13 +51,6 @@ class PaddleOCRVLEngine:
         return cls._instance
 
     def __init__(self, device: str = "cuda:0", model_name: str = "PaddleOCR-VL-1.5-0.9B"):
-        """
-        初始化引擎（只执行一次）
-
-        Args:
-            device: 设备 (cuda:0, cuda:1 等，PaddleOCR 仅支持 GPU)
-            model_name: 模型名称或路径 (默认: PaddleOCR-VL-1.5-0.9B)
-        """
         if self._initialized:
             return
 
@@ -65,71 +60,39 @@ class PaddleOCRVLEngine:
 
             self.device = device
             self.model_name = model_name
+            self.gpu_id = 0
 
-            # 从 device 字符串中提取 GPU ID (例如 "cuda:0" -> 0)
-            if "cuda:" in device:
-                self.gpu_id = int(device.split(":")[-1])
-            else:
-                self.gpu_id = 0
-                logger.warning(f"⚠️  Invalid device format: {device}, using GPU 0")
+            # 解析 GPU ID
+            if "cuda" in device.lower():
+                try:
+                    parts = device.split(":")
+                    if len(parts) > 1:
+                        self.gpu_id = int(parts[-1])
+                except ValueError:
+                    logger.warning(f"⚠️ Invalid device format '{device}', defaulting to GPU 0")
 
-            # 检查 GPU 可用性（PaddleOCR-VL 仅支持 GPU）
-            self._check_gpu_availability()
-
+            self._check_environment()
+            
             self._initialized = True
+            logger.info(f"🔧 PaddleOCR-VL Engine initialized (Model: {self.model_name}, Device: {self.device})")
 
-            logger.info("🔧 PaddleOCR-VL Engine initialized")
-            logger.info(f"   Device: {self.device} (GPU ID: {self.gpu_id})")
-            logger.info(f"   Target Model: {self.model_name}")
+    def _check_environment(self):
+        """检查 GPU 和 Paddle 环境"""
+        if not PADDLE_AVAILABLE:
+            raise ImportError("PaddlePaddle environment is missing.")
 
-    def _check_gpu_availability(self):
-        """
-        检查 GPU 信息并输出日志
-        PaddleOCR-VL 仅支持 GPU 推理，但不阻止低版本 GPU 运行
-        """
+        if not paddle.device.is_compiled_with_cuda():
+            logger.error("❌ PaddlePaddle is installed but NOT compiled with CUDA.")
+            raise RuntimeError("PaddlePaddle CUDA version required.")
+
         try:
-            import paddle
-
-            # 检查是否编译了 CUDA 支持
-            if not paddle.is_compiled_with_cuda():
-                logger.warning("⚠️  PaddlePaddle is not compiled with CUDA")
-                logger.warning("   PaddleOCR-VL requires GPU support")
-                logger.warning("   Install: pip install paddlepaddle-gpu==3.0.0b1 -i https://www.paddlepaddle.org.cn/packages/stable/cu118/")
-                return
-
-            # 检查是否有可用的 GPU
-            gpu_count = paddle.device.cuda.device_count()
-            if gpu_count == 0:
-                logger.warning("⚠️  No CUDA devices found")
-                logger.warning("   PaddleOCR-VL requires GPU for inference")
-                return
-
-            # 获取 GPU 信息
-            try:
-                gpu_name = paddle.device.cuda.get_device_name(0)
-                compute_capability = paddle.device.cuda.get_device_capability(0)
-
-                logger.info(f"✅ GPU detected: {gpu_name}")
-                logger.info(f"   Compute Capability: {compute_capability[0]}.{compute_capability[1]}")
-                logger.info(f"   GPU Count: {gpu_count}")
-
-                # 仅输出建议，不阻止运行
-                cc_major = compute_capability[0]
-                cc_minor = compute_capability[1]
-                if cc_major < 8 or (cc_major == 8 and cc_minor < 5):
-                    logger.info("ℹ️  GPU Compute Capability < 8.5")
-                    logger.info("   Official recommendation: CC ≥ 8.5 for best performance")
-                    logger.info("   Your GPU may still work, but performance might vary")
-            except Exception as e:
-                logger.debug(f"Could not get detailed GPU info: {e}")
-
-        except ImportError:
-            logger.warning("⚠️  PaddlePaddle not installed")
-        except Exception as e:
-            logger.debug(f"GPU check warning: {e}")
+            gpu_name = paddle.device.cuda.get_device_name(self.gpu_id)
+            logger.info(f"✅ GPU Detected: {gpu_name}")
+        except Exception:
+            pass
 
     def _load_pipeline(self):
-        """延迟加载 PaddleOCR-VL 管道"""
+        """延迟加载 PaddleX Pipeline"""
         if self._pipeline is not None:
             return self._pipeline
 
@@ -137,248 +100,193 @@ class PaddleOCRVLEngine:
             if self._pipeline is not None:
                 return self._pipeline
 
-            logger.info("=" * 60)
-            logger.info(f"📥 Loading PaddleOCR-VL Pipeline ({self.model_name})...")
-            logger.info("=" * 60)
+            logger.info(f"📥 Loading PaddleOCR-VL Pipeline: {self.model_name}...")
+            start_time = time.time()
 
+            # 设置设备
+            paddle.set_device(f"gpu:{self.gpu_id}")
+
+            # 确定模型路径 (优先使用本地缓存)
+            pipeline_source = self.model_name
+            local_base = Path("/app/models/paddlex") / self.model_name
+            pdx_home = os.environ.get("PADDLEX_HOME")
+
+            if local_base.exists() and any(local_base.iterdir()):
+                logger.info(f"📂 Using local model: {local_base}")
+                pipeline_source = str(local_base)
+            elif pdx_home:
+                logger.info(f"💾 Using PADDLEX_HOME: {pdx_home}")
+            
             try:
-                import paddle
-                from paddlex import create_pipeline
-
-                # 设置 PaddlePaddle 使用指定的 GPU
-                if paddle.is_compiled_with_cuda():
-                    paddle.set_device(f"gpu:{self.gpu_id}")
-                    logger.info(f"🎯 PaddlePaddle device set to: gpu:{self.gpu_id}")
-                else:
-                    logger.warning("⚠️  CUDA not available, PaddleOCR-VL may not work")
-
-                # =========================================================================
-                # 智能路径解析逻辑 (适配 Docker 持久化挂载)
-                # =========================================================================
-                # 1. 优先检查 Docker 挂载的 PADDLEX_HOME 环境变量
-                pdx_home = os.environ.get("PADDLEX_HOME")
-                if pdx_home:
-                    logger.info(f"💾 Using PADDLEX_HOME from env: {pdx_home}")
-                else:
-                    logger.warning("⚠️  PADDLEX_HOME env not set, models might not persist!")
-
-                # 2. 定义手动模型目录 (兼容旧的 pre-download 方式)
-                base_model_dir = Path("/app/models/paddlex")
-                local_model_path = base_model_dir / self.model_name
-                
-                pipeline_source = self.model_name 
-
-                # 3. 检查是否有手动放置的模型文件
-                # 如果用户还是手动把模型放在了 /app/models/paddlex 下，我们优先用它
-                if local_model_path.exists() and local_model_path.is_dir() and any(local_model_path.iterdir()):
-                    logger.info(f"📂 Found manual local model: {local_model_path}")
-                    pipeline_source = str(local_model_path)
-                else:
-                    # 默认情况：使用模型名称，触发 PaddleX 自动下载
-                    # 因为我们挂载了 PADDLEX_HOME，所以下载会持久化
-                    logger.info(f"🌐 Model not found locally, will use auto-download: '{self.model_name}'")
-                    logger.info(f"   Target: {pdx_home if pdx_home else 'System Default Cache'}")
-
-                # 初始化管道
-                start_time = time.time()
-                
-                # 使用 PaddleX 的 create_pipeline API
+                # 创建 Pipeline
                 self._pipeline = create_pipeline(
                     pipeline=pipeline_source,
-                    device=f"gpu:{self.gpu_id}" if paddle.is_compiled_with_cuda() else "cpu",
-                    # 可以在这里传递其他参数
+                    device=f"gpu:{self.gpu_id}",
+                    use_hpip=False 
                 )
-
-                logger.info("=" * 60)
-                logger.info(f"✅ PaddleOCR-VL Pipeline loaded in {time.time() - start_time:.2f}s!")
-                logger.info(f"   Source: {pipeline_source}")
-                logger.info(f"   Device: GPU {self.gpu_id}")
-                logger.info("=" * 60)
-
+                
+                logger.success(f"✅ Pipeline loaded in {time.time() - start_time:.2f}s")
                 return self._pipeline
 
             except Exception as e:
-                logger.error("=" * 80)
-                logger.error("❌ 管道加载失败:")
-                logger.error(f"   错误类型: {type(e).__name__}")
-                logger.error(f"   错误信息: {e}")
-                logger.error("")
-                logger.error("💡 排查建议:")
-                logger.error("   1. 检查网络连接（首次运行需要下载模型）")
-                logger.error("   2. 检查显存是否充足")
-                logger.error("   3. 检查 CUDA 版本兼容性")
-                logger.error("=" * 80)
-
-                import traceback
-                logger.debug("完整堆栈跟踪:")
-                logger.debug(traceback.format_exc())
-
-                raise
-
-    def warmup(self):
-        """
-        手动触发模型加载（预热）
-        建议在 Worker 启动时调用，避免第一个请求处理过慢
-        """
-        if self._pipeline is None:
-            logger.info("🔥 Warming up PaddleOCR-VL engine...")
-            try:
-                self._load_pipeline()
-                logger.info("🔥 Warmup completed! Engine is ready.")
-            except Exception as e:
-                logger.error(f"🔥 Warmup failed: {e}")
-
-    def cleanup(self):
-        """
-        清理推理产生的显存（不卸载模型）
-        """
-        try:
-            import paddle
-            import gc
-
-            # 清理 PaddlePaddle 显存
-            if paddle.device.is_compiled_with_cuda():
-                paddle.device.cuda.empty_cache()
-                logger.debug("🧹 PaddleOCR-VL: CUDA cache cleared")
-
-            # 清理 Python 对象
-            gc.collect()
-
-            logger.debug("🧹 PaddleOCR-VL: Memory cleanup completed")
-        except Exception as e:
-            logger.debug(f"Memory cleanup warning: {e}")
+                logger.error(f"❌ Failed to load pipeline: {e}")
+                raise RuntimeError(f"PaddleOCR-VL load failed: {e}")
 
     def parse(self, file_path: str, output_path: str, **kwargs) -> Dict[str, Any]:
         """
-        解析文档或图片
+        执行解析
 
         Args:
             file_path: 输入文件路径
             output_path: 输出目录
-            **kwargs: 其他参数
-
-        Returns:
-            解析结果（同时保存 Markdown 和 JSON 两种格式）
+            **kwargs: 支持 PaddleOCR-VL 的所有参数 (支持驼峰或下划线命名)
         """
         file_path = Path(file_path)
         output_path = Path(output_path)
         output_path.mkdir(parents=True, exist_ok=True)
 
-        logger.info(f"🤖 PaddleOCR-VL parsing: {file_path.name}")
+        logger.info(f"🤖 Processing: {file_path.name}")
         
-        # 加载管道
         pipeline = self._load_pipeline()
+        
+        # 参数映射表 (API 驼峰 -> PaddleX 下划线)
+        param_mapping = {
+            # 功能开关
+            "useDocOrientationClassify": "use_doc_orientation_classify",
+            "useDocUnwarping": "use_doc_unwarping",
+            "useLayoutDetection": "use_layout_parsing", # API 叫 useLayoutDetection, PaddleX 内部叫 use_layout_parsing
+            "useChartRecognition": "use_chart_recognition",
+            "useSealRecognition": "use_seal_recognition",
+            "useOcrForImageBlock": "use_ocr_for_image_block",
+            "layoutNms": "layout_nms",
+            # 后处理参数
+            "markdownIgnoreLabels": "markdown_ignore_labels",
+            "mergeTables": "merge_tables",
+            "relevelTitles": "relevel_titles",
+            "restructurePages": "restructure_pages",
+            "layoutShapeMode": "layout_shape_mode",
+            "minPixels": "min_pixels",
+            "maxPixels": "max_pixels",
+            # 生成参数
+            "promptLabel": "prompt_label", 
+            "temperature": "temperature",
+            "topP": "top_p",
+            "repetitionPenalty": "repetition_penalty"
+        }
 
-        # 执行推理
+        # 1. 规范化参数 (将 kwargs 中的 CamelCase 转为 snake_case)
+        predict_params = {}
+        for k, v in kwargs.items():
+            if k in param_mapping:
+                predict_params[param_mapping[k]] = v
+            else:
+                predict_params[k] = v
+
         try:
-            logger.info("🚀 开始使用 PaddleOCR-VL 识别...")
+            # =================================================================
+            # 【关键修复】动态检查 pipeline 是否具备预处理能力
+            # =================================================================
+            # 检查 pipeline 实例是否有 doc_preprocessor_pipeline 属性且不为空
+            has_preprocessor = hasattr(pipeline, "doc_preprocessor_pipeline") and pipeline.doc_preprocessor_pipeline is not None
             
-            # PaddleX v3 predict 方法参数
-            # use_doc_orientation_classify: 启用文档方向分类
-            # use_doc_unwarping: 启用文档矫正
-            # use_layout_parsing: 启用版面分析
-            result = pipeline.predict(
-                str(file_path),
-                use_doc_orientation_classify=True,
-                use_doc_unwarping=True,
-                use_layout_parsing=True
-            )
+            # 获取用户设置 (如果未设置，默认值将在下面处理)
+            req_orientation = predict_params.get("use_doc_orientation_classify", False)
+            req_unwarping = predict_params.get("use_doc_unwarping", False)
+
+            # 如果请求了预处理功能但模型不支持，强制关闭并警告
+            if (req_orientation or req_unwarping) and not has_preprocessor:
+                logger.warning("⚠️ 请求了文档矫正/分类，但模型缺少预处理模块。已自动禁用以防止崩溃。")
+                predict_params["use_doc_orientation_classify"] = False
+                predict_params["use_doc_unwarping"] = False
             
-            # 结果可能是一个生成器或列表
-            results = list(result)
+            # 设置默认值 (如果 predict_params 中没有指定)
+            # 根据 API 习惯，如果用户没传，我们设置默认值。
+            # 注意：use_layout_parsing 默认为 True
+            if "use_layout_parsing" not in predict_params:
+                predict_params["use_layout_parsing"] = True
+            
+            # 对于方向分类和去弯曲，如果模型支持且用户没指定，可以选择开启或关闭
+            # 为了稳定性，我们默认关闭（除非用户显式开启），或者如果模型支持则开启。
+            # 这里采取策略：如果模型支持，且用户未显式设置 False，则默认开启？
+            # 不，为了对齐 API 默认行为 (False)，我们保持 False，除非用户传入 True。
+            if "use_doc_orientation_classify" not in predict_params:
+                predict_params["use_doc_orientation_classify"] = False # 默认关闭，提升速度
+            
+            if "use_doc_unwarping" not in predict_params:
+                predict_params["use_doc_unwarping"] = False # 默认关闭，提升速度
 
-            logger.info("✅ PaddleOCR-VL completed")
-            logger.info(f"   识别了 {len(results)} 页/张")
+            # 设置输入
+            predict_params["input"] = str(file_path)
 
-            markdown_list = []
+            # 打印最终使用的参数 (排除 input 以防日志过长)
+            log_params = {k: v for k, v in predict_params.items() if k != "input"}
+            logger.info(f"🚀 开始推理 (参数: {json.dumps(log_params, default=str, ensure_ascii=False)})")
+            
+            # 执行推理
+            output = pipeline.predict(**predict_params)
+            
+            results = list(output)
+            logger.info(f"📄 Processed {len(results)} pages")
 
+            markdown_pages = []
+            
             for idx, res in enumerate(results, 1):
-                logger.info(f"📝 处理结果 {idx}/{len(results)}")
+                page_dir = output_path / f"page_{idx}"
+                page_dir.mkdir(parents=True, exist_ok=True)
 
-                try:
-                    # 为每页创建子目录
-                    page_output_dir = output_path / f"page_{idx}"
-                    page_output_dir.mkdir(parents=True, exist_ok=True)
+                # 保存图片和JSON
+                if hasattr(res, "save_to_img"): res.save_to_img(str(page_dir))
+                if hasattr(res, "save_to_json"): res.save_to_json(str(page_dir))
 
-                    # 保存可视化结果和JSON
-                    if hasattr(res, "save_to_img"):
-                        res.save_to_img(str(page_output_dir))
-                    if hasattr(res, "save_to_json"):
-                        res.save_to_json(str(page_output_dir))
-                    
-                    # 尝试保存 Markdown (如果支持)
-                    if hasattr(res, "save_to_markdown"):
-                        res.save_to_markdown(str(page_output_dir))
+                # 提取 Markdown
+                page_md = ""
+                if hasattr(res, "markdown") and res.markdown:
+                    page_md = str(res.markdown)
+                elif hasattr(res, "str") and res.str:
+                    page_md = str(res.str)
+                elif hasattr(res, "save_to_markdown"):
+                    try:
+                        res.save_to_markdown(str(page_dir))
+                        saved_mds = list(page_dir.glob("*.md"))
+                        if saved_mds:
+                            page_md = saved_mds[0].read_text(encoding="utf-8")
+                    except Exception:
+                        pass
 
-                    # 收集 Markdown 内容
-                    md_content = ""
-                    if hasattr(res, "markdown"):
-                        # 如果 res.markdown 是对象，尝试转字符串
-                        md_content = str(res.markdown)
-                    elif hasattr(res, "str"):
-                         md_content = str(res.str)
-                    
-                    if md_content:
-                        markdown_list.append(md_content)
+                if page_md:
+                    markdown_pages.append(page_md)
 
-                except Exception as e:
-                    logger.warning(f"   页处理出错: {e}")
+            # 合并结果
+            full_markdown = "\n\n---\n\n".join(markdown_pages)
+            final_md_path = output_path / "result.md"
+            final_md_path.write_text(full_markdown, encoding="utf-8")
             
-            # 合并 Markdown
-            markdown_text = ""
-            
-            # 优先使用 pipeline 自带的合并方法（如果存在）
-            if hasattr(pipeline, "concatenate_markdown_pages") and markdown_list:
-                try:
-                    markdown_text = pipeline.concatenate_markdown_pages(markdown_list)
-                    logger.info("   使用官方 concatenate_markdown_pages() 方法合并")
-                except Exception as e:
-                    logger.warning(f"   合并失败，降级为手动合并: {e}")
-                    markdown_text = "\n\n---\n\n".join(markdown_list)
-            elif markdown_list:
-                # 手动合并
-                markdown_text = "\n\n---\n\n".join(markdown_list)
-            
-            # 如果没有直接获得 markdown，尝试读取生成的 .md 文件
-            if not markdown_text:
-                logger.info("   尝试从输出目录读取 Markdown 文件...")
-                for md_file in output_path.rglob("*.md"):
-                    if md_file.name != "result.md": # 排除自己
-                        text = md_file.read_text(encoding="utf-8")
-                        markdown_text += text + "\n\n---\n\n"
-
-            # 保存最终结果
-            markdown_file = output_path / "result.md"
-            markdown_file.write_text(markdown_text, encoding="utf-8")
-            logger.info(f"📄 Markdown 已保存: {markdown_file}")
+            self.cleanup()
 
             return {
                 "success": True,
-                "output_path": str(output_path),
-                "markdown": markdown_text,
-                "markdown_file": str(markdown_file),
+                "result_path": str(output_path),
+                "markdown": full_markdown,
+                "markdown_file": str(final_md_path)
             }
 
         except Exception as e:
-            logger.error(f"❌ OCR 解析失败: {e}")
-            import traceback
-            logger.debug(traceback.format_exc())
+            logger.error(f"❌ Inference failed: {e}")
+            logger.error(traceback.format_exc())
+            self.cleanup()
             raise
 
-        finally:
-            self.cleanup()
-
+    def cleanup(self):
+        """清理显存"""
+        if PADDLE_AVAILABLE and paddle.device.is_compiled_with_cuda():
+            paddle.device.cuda.empty_cache()
+            gc.collect()
 
 # 全局单例
-_engine = None
-
+_engine_instance = None
 
 def get_engine(model_name: str = "PaddleOCR-VL-1.5-0.9B") -> PaddleOCRVLEngine:
-    """
-    获取全局引擎实例
-    注意：单例模式下，第一次调用时的 model_name 会决定后续一直使用的模型
-    """
-    global _engine
-    if _engine is None:
-        _engine = PaddleOCRVLEngine(model_name=model_name)
-    return _engine
+    global _engine_instance
+    if _engine_instance is None:
+        _engine_instance = PaddleOCRVLEngine(model_name=model_name)
+    return _engine_instance
