@@ -330,6 +330,23 @@ export default {
     paddleOCRTip3: '原生支持 PDF 多页文档处理',
     paddleOCRTip4: '仅支持 GPU 推理（要求 NVIDIA GPU）',
     
+    // === 新增：PaddleOCR 详细参数翻译 ===
+    paddleOCROptions: '🌟 PaddleOCR 专用处理选项',
+    useDocOrientationClassify: '文档方向自动分类校正',
+    useDocUnwarping: '文档图像去弯曲 (针对形变)',
+    useLayoutDetection: '启用版面分析 (Layout)',
+    useChartRecognition: '启用图表识别 (Chart)',
+    useSealRecognition: '启用印章识别 (Seal)',
+    useOcrForImageBlock: '对图像块进行 OCR 识别',
+    layoutNms: '启用版面 NMS 去重',
+    restructurePages: '重构页面逻辑排版',
+    temperature: '温度 (Temperature)',
+    topP: '采样阈值 (Top P)',
+    repetitionPenalty: '重复惩罚 (Repetition Penalty)',
+    layoutShapeMode: '版面形状模式',
+    minMaxPixels: '图像像素限制 (Min - Max)',
+    markdownIgnoreLabels: '忽略的 Markdown 标签 (逗号分隔)',
+    
     // Watermark removal
     watermarkOptions: '🎨 水印去除选项',
     enableWatermarkRemoval: '启用水印去除 (Watermark Removal)',
@@ -369,7 +386,6 @@ export default {
     cancelled: '已取消',
   },
   queue: {
-    // ... (保持不变)
     title: '队列管理',
     stats: '队列统计',
     tasks: '队列任务',
@@ -415,7 +431,6 @@ export default {
     healthCheckFailed: '健康检查失败',
   },
   profile: {
-    // ... (保持不变)
     title: '个人资料',
     username: '用户名',
     email: '邮箱',
@@ -455,7 +470,6 @@ export default {
     changePasswordButton: '修改密码',
   },
   user: {
-    // ... (保持不变)
     title: '用户管理',
     createUser: '创建用户',
     createNewUser: '创建新用户',
@@ -499,7 +513,6 @@ export default {
     deleteFailed: '删除用户失败',
   },
   apiDocs: {
-    // ... (保持不变)
     title: 'API 文档',
     loading: '正在加载 API 文档...',
     loadError: '无法加载 API 文档',
@@ -509,7 +522,6 @@ export default {
     bearerToken: 'Bearer Token',
   },
   apiKey: {
-    // ... (保持不变)
     title: 'API Token 管理',
     createNew: '创建新 Token',
     noTokens: '暂无 API Token',
@@ -564,7 +576,6 @@ export default {
     copyright: '© 2024 Tianshu 天枢 - 企业级 AI 数据预处理平台',
   },
   systemConfig: {
-    // ... (保持不变)
     title: '系统配置',
     description: '配置系统名称、Logo 和其他显示设置',
     systemName: '系统名称',
