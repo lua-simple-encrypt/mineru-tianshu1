@@ -190,8 +190,9 @@ services:
       --port 30023
       --gpu-memory-utilization 0.90
       --max-model-len 8192
+      --max-num-batched-tokens 8192
       --enforce-eager
-      --limit-mm-per-prompt '{"image": 10}'
+      --limit-mm-per-prompt '{"image": 4}'
     shm_size: 32gb
     deploy:
       resources:
@@ -236,8 +237,9 @@ services:
       --port 30024
       --gpu-memory-utilization 0.90
       --max-model-len 8192
+      --max-num-batched-tokens 8192
       --enforce-eager
-      --limit-mm-per-prompt '{"image": 10}'
+      --limit-mm-per-prompt '{"image": 4}'
     shm_size: 32gb
     deploy:
       resources:
