@@ -34,8 +34,8 @@ class PaddleOCRVLEngine:
     - 单例模式：确保进程内只有一个模型实例
     - 显存管理：支持推理后清理显存
     - 格式支持：输出 Markdown 和 JSON
-    - 兼容性修复：自动处理 doc_preprocessor_pipeline 缺失问题
     - 参数支持：支持 PaddleOCR-VL-1.5 的全量参数配置
+    - 内存优化：使用生成器流式处理长文档，防止 OOM
     """
 
     _instance: Optional["PaddleOCRVLEngine"] = None
@@ -154,7 +154,7 @@ class PaddleOCRVLEngine:
             # 功能开关
             "useDocOrientationClassify": "use_doc_orientation_classify",
             "useDocUnwarping": "use_doc_unwarping",
-            "useLayoutDetection": "use_layout_parsing", # API 叫 useLayoutDetection, PaddleX 内部叫 use_layout_parsing
+            "useLayoutDetection": "use_layout_parsing",
             "useChartRecognition": "use_chart_recognition",
             "useSealRecognition": "use_seal_recognition",
             "useOcrForImageBlock": "use_ocr_for_image_block",
@@ -174,22 +174,19 @@ class PaddleOCRVLEngine:
             "repetitionPenalty": "repetition_penalty"
         }
 
-        # 1. 规范化参数 (将 kwargs 中的 CamelCase 转为 snake_case)
+        # 1. 规范化参数并过滤天枢其他无关参数
+        # (只传递被 param_mapping 记录的 PaddleX 参数，防止 predict 报错 TypeError: unexpected keyword argument)
         predict_params = {}
         for k, v in kwargs.items():
             if k in param_mapping:
                 predict_params[param_mapping[k]] = v
-            else:
-                predict_params[k] = v
 
         try:
             # =================================================================
-            # 【关键修复】动态检查 pipeline 是否具备预处理能力
+            # 动态检查 pipeline 是否具备预处理能力
             # =================================================================
-            # 检查 pipeline 实例是否有 doc_preprocessor_pipeline 属性且不为空
             has_preprocessor = hasattr(pipeline, "doc_preprocessor_pipeline") and pipeline.doc_preprocessor_pipeline is not None
             
-            # 获取用户设置 (如果未设置，默认值将在下面处理)
             req_orientation = predict_params.get("use_doc_orientation_classify", False)
             req_unwarping = predict_params.get("use_doc_unwarping", False)
 
@@ -199,39 +196,31 @@ class PaddleOCRVLEngine:
                 predict_params["use_doc_orientation_classify"] = False
                 predict_params["use_doc_unwarping"] = False
             
-            # 设置默认值 (如果 predict_params 中没有指定)
-            # 根据 API 习惯，如果用户没传，我们设置默认值。
-            # 注意：use_layout_parsing 默认为 True
+            # 默认参数兜底
             if "use_layout_parsing" not in predict_params:
                 predict_params["use_layout_parsing"] = True
-            
-            # 对于方向分类和去弯曲，如果模型支持且用户没指定，可以选择开启或关闭
-            # 为了稳定性，我们默认关闭（除非用户显式开启），或者如果模型支持则开启。
-            # 这里采取策略：如果模型支持，且用户未显式设置 False，则默认开启？
-            # 不，为了对齐 API 默认行为 (False)，我们保持 False，除非用户传入 True。
             if "use_doc_orientation_classify" not in predict_params:
-                predict_params["use_doc_orientation_classify"] = False # 默认关闭，提升速度
-            
+                predict_params["use_doc_orientation_classify"] = False
             if "use_doc_unwarping" not in predict_params:
-                predict_params["use_doc_unwarping"] = False # 默认关闭，提升速度
+                predict_params["use_doc_unwarping"] = False
 
-            # 设置输入
+            # 设置输入文件
             predict_params["input"] = str(file_path)
 
-            # 打印最终使用的参数 (排除 input 以防日志过长)
+            # 打印最终参数 (排除 input 以防日志过长)
             log_params = {k: v for k, v in predict_params.items() if k != "input"}
             logger.info(f"🚀 开始推理 (参数: {json.dumps(log_params, default=str, ensure_ascii=False)})")
             
             # 执行推理
-            output = pipeline.predict(**predict_params)
+            # 【性能优化】不使用 list(output) 全部加载到内存，改为生成器流式处理，防止长 PDF 导致 OOM
+            output_generator = pipeline.predict(**predict_params)
             
-            results = list(output)
-            logger.info(f"📄 Processed {len(results)} pages")
-
             markdown_pages = []
+            page_count = 0
             
-            for idx, res in enumerate(results, 1):
-                page_dir = output_path / f"page_{idx}"
+            for res in output_generator:
+                page_count += 1
+                page_dir = output_path / f"page_{page_count}"
                 page_dir.mkdir(parents=True, exist_ok=True)
 
                 # 保存图片和JSON
@@ -240,31 +229,24 @@ class PaddleOCRVLEngine:
 
                 # 提取 Markdown
                 page_md = ""
-                # =========================================================
-                # 【关键修复】正确从字典或对象中提取文本
-                # =========================================================
+                
+                # 兼容 PaddleX 不同的 Markdown 存储结构
                 if hasattr(res, "markdown") and res.markdown:
-                    # 1. 如果是字典，提取 'markdown_texts'
                     if isinstance(res.markdown, dict):
                         page_md = res.markdown.get('markdown_texts', '')
-                        # 有时候可能是 'text'
                         if not page_md:
                             page_md = res.markdown.get('text', '')
-                    # 2. 如果是对象，尝试访问 .markdown_texts 属性
                     elif hasattr(res.markdown, 'markdown_texts'):
                         page_md = res.markdown.markdown_texts
-                    # 3. 如果已经是字符串，直接使用
                     elif isinstance(res.markdown, str):
                         page_md = res.markdown
-                    # 4. 兜底：强转字符串（可能会变成字典字符串，但在没办法时只能这样）
                     else:
                         page_md = str(res.markdown)
                 
-                # 兼容旧版本 API
                 elif hasattr(res, "str") and res.str:
                     page_md = str(res.str)
                 
-                # 尝试从保存的文件读取（最可靠的方式）
+                # 尝试从保存的文件读取（最可靠的方式兜底）
                 if not page_md and hasattr(res, "save_to_markdown"):
                     try:
                         res.save_to_markdown(str(page_dir))
@@ -277,15 +259,15 @@ class PaddleOCRVLEngine:
                 if page_md:
                     markdown_pages.append(page_md)
                 else:
-                    logger.warning(f"⚠️ Page {idx}: No markdown content extracted.")
+                    logger.warning(f"⚠️ Page {page_count}: No markdown content extracted.")
+
+            logger.info(f"📄 Successfully processed {page_count} pages")
 
             # 合并结果
             full_markdown = "\n\n---\n\n".join(markdown_pages)
             final_md_path = output_path / "result.md"
             final_md_path.write_text(full_markdown, encoding="utf-8")
             
-            self.cleanup()
-
             return {
                 "success": True,
                 "result_path": str(output_path),
@@ -296,8 +278,9 @@ class PaddleOCRVLEngine:
         except Exception as e:
             logger.error(f"❌ Inference failed: {e}")
             logger.error(traceback.format_exc())
-            self.cleanup()
             raise
+        finally:
+            self.cleanup()
 
     def cleanup(self):
         """清理显存"""
