@@ -4,7 +4,7 @@ MinerU Pipeline Engine
 使用 MinerU 处理 PDF 和图片
 
 修复说明：
-- [核心修复] 增加深度文本清洗 (_clean_markdown)，解决 HTML 转义、LaTeX 过度包装和模型幻觉标签
+- [核心修复] 深度文本清洗 (双重反转义、去重、清洗 LaTeX 符号)
 - [核心修复] 使用临时纯英文目录处理，规避中文路径问题
 - [增强] 增加 VLLM 服务健康检查与自动等待机制
 - [增强] 修复 Markdown 内容为空时的自动恢复逻辑
@@ -17,8 +17,8 @@ import tempfile
 import time
 import urllib.request
 import urllib.error
-import re        # <--- [新增] 正则表达式库
-import html      # <--- [新增] HTML转义库
+import re        # <--- 正则表达式库
+import html      # <--- HTML转义库
 from pathlib import Path
 from typing import Optional, Dict, Any
 from threading import Lock
@@ -116,23 +116,36 @@ class MinerUPipelineEngine:
     def _clean_markdown(self, text: str) -> str:
         """
         [关键功能] 深度清洗 Markdown 文本
-        解决 HTML 转义、LaTeX 过度包装和模型幻觉问题
+        解决 HTML 转义、LaTeX 过度包装、非换行空格和重复内容问题
         """
         if not text:
             return ""
 
-        # 1. HTML 反转义 (解决 &gt; -> >)
-        # 必须先执行，因为有时候 &gt; 可能被包裹在 \mathrm{} 中
+        # 1. HTML 反转义 (执行两次以解决 &amp;gt; 这种双重转义问题)
+        text = html.unescape(text)
         text = html.unescape(text)
 
-        # 2. 去除 LaTeX 的 \mathrm{} 包装 (解决 \mathrm{LVEDd} -> LVEDd)
-        # 修改说明：
-        # - 使用 (.*?) 非贪婪匹配，避免 [^\}]+ 无法匹配空内容或跨度过大的问题
-        # - 添加 re.DOTALL 标志，确保 . 可以匹配换行符，处理跨行的 \mathrm{...}
+        # 2. 暴力替换常见的未转义字符 (作为 html.unescape 的兜底)
+        text = text.replace('&gt;', '>').replace('&lt;', '<').replace('&amp;', '&')
+
+        # 3. 去除 LaTeX 的 \mathrm{} 包装
+        # 使用 flags=re.DOTALL 确保能处理跨行内容
         text = re.sub(r'\\mathrm\{(.*?)\}', r'\1', text, flags=re.DOTALL)
 
-        # 3. 去除模型幻觉产生的 <del> 标签 (解决 <del>cm)
+        # 4. 清洗 LaTeX 特殊字符
+        # 将 ~ (LaTeX非换行空格) 替换为普通空格
+        text = text.replace('~', ' ')
+        
+        # 5. 去除模型幻觉产生的 <del> 标签
         text = text.replace('<del>', '').replace('</del>', '')
+        
+        # 6. [新增] 简单的去重逻辑 (解决 117\n\n117 这种相邻重复数字/短语)
+        # 匹配逻辑：连续两个相同的单词/数字(长度>1)，中间由空白字符分隔，替换为单个
+        # 比如： "117  117" -> "117"
+        text = re.sub(r'(\b\w+\b)([\s\r\n]+)\1', r'\1', text)
+
+        # 7. 去除连续的多余空行 (保留最多两个换行)
+        text = re.sub(r'\n{3,}', '\n\n', text)
 
         return text
 
