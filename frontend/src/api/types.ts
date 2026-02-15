@@ -85,8 +85,8 @@ export interface APIKeyListResponse {
 
 // ==================== 任务相关类型 ====================
 
-// 任务状态
-export type TaskStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled'
+// 任务状态 (增加了 'paused' 状态)
+export type TaskStatus = 'pending' | 'paused' | 'processing' | 'completed' | 'failed' | 'cancelled'
 
 // 后端类型
 export type Backend =
@@ -260,7 +260,7 @@ export interface Task {
   completed_at: string | null
   worker_id: string | null
   retry_count: number
-  result_path: string | null
+  result_path: string | null | 'CLEARED' // ✅ 新增：支持 'CLEARED' 状态标记
   source_url?: string | null  // ✅ 新增：源文件下载链接
   is_parent?: boolean         // ✅ 新增：是否为父任务
   child_count?: number
