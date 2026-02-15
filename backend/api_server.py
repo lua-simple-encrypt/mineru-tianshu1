@@ -286,6 +286,26 @@ async def submit_task(
         False,
         description="是否将 Office 文件转换为 PDF 后再处理（图片提取更完整，但速度较慢）"
     ),
+
+    # === PaddleOCR 专属参数 ===
+    useDocOrientationClassify: bool = Form(False, description="文档方向分类"),
+    useDocUnwarping: bool = Form(False, description="文档去弯曲"),
+    useLayoutDetection: bool = Form(True, description="是否启用版面分析"),
+    useChartRecognition: bool = Form(False, description="是否启用图表识别"),
+    useSealRecognition: bool = Form(True, description="是否启用印章识别"),
+    useOcrForImageBlock: bool = Form(False, description="是否对图像块进行OCR"),
+    mergeTables: bool = Form(True, description="是否合并表格"),
+    relevelTitles: bool = Form(True, description="是否重构标题层级"),
+    layoutShapeMode: str = Form("auto", description="版面形状模式"),
+    promptLabel: str = Form("ocr", description="提示词标签"),
+    repetitionPenalty: float = Form(1.0, description="重复惩罚"),
+    temperature: float = Form(0.0, description="温度"),
+    topP: float = Form(1.0, description="Top P"),
+    minPixels: int = Form(147384, description="最小像素"),
+    maxPixels: int = Form(2822400, description="最大像素"),
+    layoutNms: bool = Form(True, description="是否启用版面 NMS"),
+    restructurePages: bool = Form(True, description="是否重构页面"),
+    markdownIgnoreLabels: str = Form("header,header_image,footer,footer_image,number,footnote,aside_text", description="忽略的标签 (逗号分隔)"),
     
     # 认证依赖
     current_user: User = Depends(require_permission(Permission.TASK_SUBMIT)),
@@ -334,6 +354,26 @@ async def submit_task(
             "watermark_conf_threshold": watermark_conf_threshold,
             "watermark_dilation": watermark_dilation,
             "convert_office_to_pdf": convert_office_to_pdf,
+
+            # === PaddleOCR 专属参数 ===
+            "useDocOrientationClassify": useDocOrientationClassify,
+            "useDocUnwarping": useDocUnwarping,
+            "useLayoutDetection": useLayoutDetection,
+            "useChartRecognition": useChartRecognition,
+            "useSealRecognition": useSealRecognition,
+            "useOcrForImageBlock": useOcrForImageBlock,
+            "mergeTables": mergeTables,
+            "relevelTitles": relevelTitles,
+            "layoutShapeMode": layoutShapeMode,
+            "promptLabel": promptLabel,
+            "repetitionPenalty": repetitionPenalty,
+            "temperature": temperature,
+            "topP": topP,
+            "minPixels": minPixels,
+            "maxPixels": maxPixels,
+            "layoutNms": layoutNms,
+            "restructurePages": restructurePages,
+            "markdownIgnoreLabels": [label.strip() for label in markdownIgnoreLabels.split(",") if label.strip()],
         }
 
         # ✅ [修复 Bug 3]：自动检测环境变量开启 RustFS，默认传递给 Worker
