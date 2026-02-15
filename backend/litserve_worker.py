@@ -171,7 +171,7 @@ except ImportError as e:
 
 
 # ==============================================================================
-# VLLM Container Controller (互斥切换版 - 无检测)
+# VLLM Container Controller (互斥切换版 - 强制检查)
 # ==============================================================================
 class VLLMController:
     """管理 vLLM Docker 容器的互斥启动"""
@@ -192,8 +192,7 @@ class VLLMController:
 
     def ensure_service(self, target_container: str, conflict_container: str):
         """
-        确保目标容器运行，并关闭冲突容器 (互斥逻辑)
-        注意：不再检测健康状态，发送启动命令后直接返回
+        确保目标容器运行，并关闭冲突容器 (严格互斥逻辑)
         
         Args:
             target_container: 需要运行的容器名
@@ -204,37 +203,37 @@ class VLLMController:
             return
         
         try:
-            # 1. 检查目标容器是否已经在运行
-            try:
-                target = client.containers.get(target_container)
-                if target.status == 'running':
-                    logger.info(f"✅ Target service {target_container} is already running.")
-                    return
-            except Exception as e:
-                # 如果找不到容器，说明没创建，提示用户
-                logger.error(f"❌ Container {target_container} not found. Please ensure it is created (e.g. docker compose up --no-start).")
-                raise e
-
-            # 2. 停止冲突容器 (释放显存)
+            # 1. 【核心修改】先强制检查并关闭冲突容器
+            # 无论目标容器是否运行，都必须确保冲突容器已停止，防止双开导致 OOM
             try:
                 conflict = client.containers.get(conflict_container)
                 if conflict.status == 'running':
                     logger.info(f"🛑 Stopping conflicting service {conflict_container} to free VRAM...")
                     conflict.stop()
+                    # 等待一下确保端口释放和显存回收
+                    time.sleep(3)
                     logger.info(f"✅ Service {conflict_container} stopped.")
-                    # 简单休眠等待释放
-                    time.sleep(2)
             except Exception:
                 # 冲突容器可能不存在或已停止，忽略
                 pass
 
-            # 3. 启动目标容器
-            logger.info(f"🚀 Starting service {target_container} (Manual/Cold Start)...")
-            target.start()
-            
-            # 【修改】不再等待健康检查，直接返回
-            logger.info(f"⚠️ Service start triggered. Assuming {target_container} will be ready shortly (No health check).")
-            
+            # 2. 检查并启动目标容器
+            try:
+                target = client.containers.get(target_container)
+                if target.status == 'running':
+                    logger.info(f"✅ Target service {target_container} is already running.")
+                    return
+                
+                logger.info(f"🚀 Starting service {target_container} (Manual/Cold Start)...")
+                target.start()
+                
+                # 【修改】不再等待健康检查，直接返回
+                logger.info(f"⚠️ Service start triggered. Assuming {target_container} will be ready shortly (No health check).")
+                
+            except Exception as e:
+                logger.error(f"❌ Failed to start target container {target_container}: {e}")
+                raise e
+        
         finally:
             try:
                 client.close()
@@ -619,16 +618,16 @@ class MinerUWorkerAPI(ls.LitAPI):
             # 如果是 PaddleOCR 任务
             if backend == "paddleocr-vl-vllm" and self.paddleocr_vl_vllm_api:
                 # 确保 Paddle 运行，关闭 MinerU
-                logger.info(f"🔄 Ensuring PaddleOCR-VL VLLM service is running (No wait)")
-                self.vllm_controller.ensure_service(paddle_container, mineru_container)
+                logger.info(f"🔄 Ensuring PaddleOCR-VL VLLM service is running (Exclusive)")
+                self.vllm_controller.ensure_service(target_container=paddle_container, conflict_container=mineru_container)
                 
             # 如果是 MinerU 任务 (vlm/hybrid local 模式)
             # 注意: remote client 模式不需要启动本地容器
             elif backend in ["vlm-auto-engine", "hybrid-auto-engine"] and self.mineru_vllm_api:
                 # 确保 MinerU 运行，关闭 Paddle
-                logger.info(f"🔄 Ensuring MinerU VLLM service is running (No wait)")
+                logger.info(f"🔄 Ensuring MinerU VLLM service is running (Exclusive)")
                 # 【修改】不再等待 health check 成功，直接继续
-                self.vllm_controller.ensure_service(mineru_container, paddle_container)
+                self.vllm_controller.ensure_service(target_container=mineru_container, conflict_container=paddle_container)
 
             # 检查文件扩展名
             file_ext = Path(file_path).suffix.lower()
@@ -1055,7 +1054,8 @@ class MinerUWorkerAPI(ls.LitAPI):
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # 处理文件（parse 方法需要 output_path）
-        result = self.paddleocr_vl_engine.parse(file_path, output_path=str(output_dir))
+        # 【关键修改】传递 **options 给 parse 方法
+        result = self.paddleocr_vl_engine.parse(file_path, output_path=str(output_dir), **options)
 
         # 规范化输出（统一文件名和目录结构）
         normalize_output(output_dir)
@@ -1092,7 +1092,8 @@ class MinerUWorkerAPI(ls.LitAPI):
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # 处理文件（parse 方法需要 output_path）
-        result = self.paddleocr_vl_vllm_engine.parse(file_path, output_path=str(output_dir))
+        # 【关键修改】传递 **options 给 parse 方法
+        result = self.paddleocr_vl_vllm_engine.parse(file_path, output_path=str(output_dir), **options)
 
         # 规范化输出（统一文件名和目录结构）
         # 注意：这里移除了 target_dir 参数，防止 TypeError，并指定处理方法
