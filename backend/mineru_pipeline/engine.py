@@ -4,10 +4,10 @@ MinerU Pipeline Engine
 使用 MinerU 处理 PDF 和图片
 
 修复说明：
-- [关键] 使用临时纯英文目录进行处理，彻底规避中文路径导致的写入失败/内容为空问题
-- [关键] 修复 Markdown 内容为空时的自动恢复逻辑 (从 JSON 重建)
-- [修复] 强制使用安全文件名 'result.pdf' 进行内部处理
-- [修复] 正确透传 backend/server_url 参数以启用 VLLM 加速
+- [核心修复] 修正结果目录查找逻辑，适配 MinerU 的输出结构 (input_filename_dir/auto/...)
+- [增强] 增加对输出目录的递归搜索，防止目录层级变化导致找不到文件
+- [原有] 保持临时目录处理方案，规避中文路径问题
+- [原有] 保持 VLLM 参数透传
 """
 
 import json
@@ -103,9 +103,7 @@ class MinerUPipelineEngine:
         file_path_obj = Path(file_path)
         file_ext = file_path_obj.suffix.lower()
 
-        # =========================================================================
-        # 1. 确定 Backend (处理模式)
-        # =========================================================================
+        # 1. 确定 Backend
         user_backend = options.get("parse_mode", "pipeline")
         if user_backend == "auto":
             user_backend = "pipeline"
@@ -124,18 +122,15 @@ class MinerUPipelineEngine:
                 server_url = self.vlm_api_base.replace("/v1", "")
                 logger.info(f"🔄 [Accelerate] Switching to {backend} using local vLLM")
 
-        # =========================================================================
         # 2. 准备参数
-        # =========================================================================
         parse_method = options.get("method", "auto")
         if options.get("force_ocr"):
             parse_method = "ocr"
 
-        # 功能开关
         formula_enable = options.get("formula_enable", True)
         table_enable = options.get("table_enable", True)
         
-        # 输出控制 (默认开启以确保调试文件生成)
+        # 输出控制
         f_draw_layout_bbox = options.get("draw_layout_bbox", True)      
         f_draw_span_bbox = options.get("draw_span_bbox", True)          
         f_dump_md = options.get("dump_markdown", True)                  
@@ -166,7 +161,6 @@ class MinerUPipelineEngine:
             with open(file_path, "rb") as f:
                 file_bytes = f.read()
 
-            # 格式转换
             if file_ext in [".png", ".jpg", ".jpeg"]:
                 logger.info("🖼️  Converting image to PDF...")
                 try:
@@ -182,13 +176,11 @@ class MinerUPipelineEngine:
             # =================================================================
             # 【核心修复】使用临时纯英文目录处理
             # =================================================================
-            # 创建临时目录，确保路径不含任何中文或特殊字符
-            # 这能彻底解决 MinerU 底层库因为路径编码问题导致的写入失败或空文件
             with tempfile.TemporaryDirectory(prefix="mineru_proc_") as temp_dir:
                 temp_work_dir = Path(temp_dir)
                 logger.info(f"🛠️  Working in temp directory: {temp_work_dir}")
                 
-                # 强制使用安全文件名
+                # 强制使用安全文件名 result.pdf
                 safe_file_name = "result.pdf"
                 
                 # 调用 MinerU 处理
@@ -198,7 +190,6 @@ class MinerUPipelineEngine:
                     pdf_bytes_list=[pdf_bytes],
                     p_lang_list=[lang],
                     
-                    # 关键参数透传
                     backend=backend,
                     parse_method=parse_method,
                     server_url=server_url,
@@ -218,36 +209,44 @@ class MinerUPipelineEngine:
                 )
 
                 # =============================================================
-                # 结果提取与搬运
+                # 结果提取与搬运 (更宽容的查找逻辑)
                 # =============================================================
-                # MinerU 输出结构: {temp_work_dir}/result/auto/result.md
-                # 注意：result 来自 safe_file_name 的 stem
-                generated_result_dir = temp_work_dir / "result"
+                # MinerU 输出结构通常是: {temp_work_dir}/{safe_file_name}/auto/result.md
+                # 但为了保险，我们在整个临时目录里找
                 
-                if not generated_result_dir.exists():
-                    logger.error("❌ MinerU failed to generate output directory in temp workspace")
-                    raise FileNotFoundError("Processing failed internally")
+                # 1. 在临时目录中查找 Markdown
+                temp_md_files = list(temp_work_dir.rglob("*.md"))
+                
+                if not temp_md_files:
+                    logger.error("❌ No Markdown files found in temp output")
+                    # 尝试列出所有文件帮助调试
+                    for f in temp_work_dir.rglob("*"):
+                        logger.debug(f"   Found file: {f}")
+                    raise FileNotFoundError("Processing failed internally - No markdown generated")
 
-                # 1. 在临时目录中读取内容 (此时路径绝对安全)
-                content = ""
+                md_file = temp_md_files[0]
+                content = md_file.read_text(encoding="utf-8")
+                logger.info(f"✅ Read MD content: {len(content)} chars")
+                
+                # 确定生成结果的根目录 (通常是 md 文件所在的父目录，如 auto/)
+                # 我们要搬运的是 result.pdf 文件夹下的内容，而不是 temp_work_dir 的全部
+                # 假设 safe_file_name 是 result.pdf，MinerU 会创建一个 result.pdf 文件夹
+                generated_root = temp_work_dir / safe_file_name
+                if not generated_root.exists():
+                    # 如果找不到标准目录，就以 md 文件的上级目录作为源
+                    generated_root = md_file.parent
+                    logger.warning(f"⚠️  Standard output dir not found, using: {generated_root}")
+
+                # 2. 查找 JSON (用于恢复内容)
                 json_content = None
-                
-                # 查找 Markdown
-                temp_md_files = list(generated_result_dir.rglob("*.md"))
-                if temp_md_files:
-                    md_file = temp_md_files[0]
-                    content = md_file.read_text(encoding="utf-8")
-                    logger.info(f"✅ Read MD content: {len(content)} chars")
-                
-                # 查找 JSON
-                temp_json_files = list(generated_result_dir.rglob("*_content_list.json"))
+                temp_json_files = list(temp_work_dir.rglob("*_content_list.json"))
                 if temp_json_files:
                     try:
                         with open(temp_json_files[0], "r", encoding="utf-8") as f:
                             json_content = json.load(f)
                     except: pass
 
-                # 【修复内容为空】如果 MD 为空，尝试从 JSON 恢复
+                # 3. 如果 MD 为空，尝试从 JSON 恢复
                 if not content.strip() and json_content:
                     logger.warning("⚠️  Markdown file is empty, attempting to recover text from JSON...")
                     recovered_text = []
@@ -258,46 +257,44 @@ class MinerUPipelineEngine:
                     content = "\n\n".join(recovered_text)
                     logger.info(f"ℹ️  Recovered {len(content)} chars from JSON")
 
-                # 2. 将结果文件搬运到用户指定的 final_output_dir
-                # 将 result/auto 下的所有文件复制过去
-                # 或者直接把 result 文件夹里的内容复制到 final_output_dir
-                logger.info(f"📦 Moving results to: {final_output_dir}")
+                # 4. 将结果文件搬运到用户指定的 final_output_dir
+                # 我们把 generated_root 下的所有内容复制过去
+                logger.info(f"📦 Moving results from {generated_root} to {final_output_dir}")
                 
-                for src_path in generated_result_dir.rglob("*"):
-                    if src_path.is_file():
-                        # 计算相对路径，保持目录结构 (例如 auto/images/1.jpg)
-                        rel_path = src_path.relative_to(generated_result_dir)
-                        dest_path = final_output_dir / rel_path
-                        
-                        # 确保目标父目录存在
-                        dest_path.parent.mkdir(parents=True, exist_ok=True)
-                        
-                        # 复制文件
-                        shutil.copy2(src_path, dest_path)
+                if generated_root.exists():
+                    # 遍历并复制所有文件
+                    for src_path in generated_root.rglob("*"):
+                        if src_path.is_file():
+                            # 计算相对路径
+                            rel_path = src_path.relative_to(generated_root)
+                            dest_path = final_output_dir / rel_path
+                            
+                            # 确保目标文件夹存在
+                            dest_path.parent.mkdir(parents=True, exist_ok=True)
+                            
+                            shutil.copy2(src_path, dest_path)
+                else:
+                    # 降级：直接把找到的那个 md 文件和同级文件复制过去
+                    shutil.copy2(md_file, final_output_dir / "result.md")
 
                 # =============================================================
                 # 返回最终结果路径
                 # =============================================================
-                # 重新定位最终目录下的关键文件
                 final_md_path = None
                 final_json_path = None
                 
-                # 查找最终目录下的 MD
                 final_mds = list(final_output_dir.rglob("*.md"))
                 if final_mds:
                     final_md_path = str(final_mds[0])
                 
-                # 查找最终目录下的 JSON
                 final_jsons = list(final_output_dir.rglob("*_content_list.json"))
                 if final_jsons:
                     final_json_path = str(final_jsons[0])
 
                 if not content.strip():
-                    # 最后一道防线：检查是否有布局 PDF
                     layout_pdfs = list(final_output_dir.rglob("*_layout.pdf"))
                     if layout_pdfs:
                         content = "> ⚠️ Text extraction returned empty content. Please check layout PDF."
-                        logger.warning("⚠️  Returning empty content warning.")
                     else:
                         raise FileNotFoundError("No valid content generated.")
 
@@ -311,7 +308,6 @@ class MinerUPipelineEngine:
 
         except Exception as e:
             logger.error(f"❌ Pipeline processing failed: {e}")
-            # 尝试打印错误堆栈
             import traceback
             logger.debug(traceback.format_exc())
             raise
