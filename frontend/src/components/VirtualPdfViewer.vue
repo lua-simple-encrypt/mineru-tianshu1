@@ -30,7 +30,7 @@
               </div>
             </div>
 
-            <canvas :id="`pdf-canvas-${page.id}`" class="block w-full h-full relative z-0"></canvas>
+            <canvas :ref="(el) => mountCanvas(el, page)" class="block w-full h-full relative z-0"></canvas>
 
             <div v-if="page.rendered && layoutMap[page.id]" class="absolute inset-0 z-20 pointer-events-none">
               <div
@@ -87,7 +87,7 @@ const highlightTarget = ref<{ pageIndex: number; bbox: any[] } | null>(null)
 
 const scrollTop = ref(0)
 const containerHeight = ref(0)
-const totalHeight = ref(0) // 🚨 绝对不可丢：滚动条支柱
+const totalHeight = ref(0) 
 const totalPages = ref(0)
 const globalScale = ref(1.0)
 const PAGE_GAP = 16 
@@ -96,18 +96,14 @@ interface PageData {
   id: number
   width: number
   height: number
-  top: number // 🚨 绝对不可丢：盒子绝对定位坐标
+  top: number 
   viewport: any
   rendered: boolean
 }
 const pages = ref<PageData[]>([])
 const renderTasks = new Map<number, any>()
+let lastWidth = 0 
 
-// =======================================================
-// 🚀 坐标换算与数据映射核心
-// =======================================================
-
-// 后端原图宽度（默认 595.28 是标准 A4 宽度）
 const sourcePdfWidth = computed(() => {
   if (props.layoutData && props.layoutData.length > 0 && props.layoutData[0]._page_width) {
     return props.layoutData[0]._page_width;
@@ -115,7 +111,6 @@ const sourcePdfWidth = computed(() => {
   return 595.28; 
 })
 
-// 将后端发来的块数据按页码归类
 const layoutMap = computed(() => {
   const map: Record<number, any[]> = {}
   if (!props.layoutData) return map
@@ -127,7 +122,6 @@ const layoutMap = computed(() => {
   return map
 })
 
-// 智能换算比例：当前画布真实宽度 / 后端输出的绝对宽度
 const pageOcrScales = computed(() => {
   const scales: Record<number, number> = {};
   for (const page of pages.value) {
@@ -141,7 +135,6 @@ const getBlockStyle = (pageId: number, bbox: any) => {
   
   let x0 = 0, y0 = 0, x1 = 0, y1 = 0;
   
-  // 兼容绝对坐标和多边形坐标
   if (bbox.length === 4 && typeof bbox[0] === 'number') {
     [x0, y0, x1, y1] = bbox as number[];
   } else if (bbox.length === 4 && Array.isArray(bbox[0])) {
@@ -159,11 +152,7 @@ const getBlockStyle = (pageId: number, bbox: any) => {
   }
 }
 
-// =======================================================
-// 🚀 核心控制：取代 Observer 的强力 Vue 渲染逻辑
-// =======================================================
-
-// 虚拟列表控制：计算出视野内（及上下一定范围）的页面
+// 虚拟列表：只筛选在屏幕视口范围内（加一定缓冲区）的元素
 const visiblePages = computed(() => {
   if (pages.value.length === 0) return []
   const startY = scrollTop.value - containerHeight.value * 1.5
@@ -173,22 +162,22 @@ const visiblePages = computed(() => {
   for (const page of pages.value) {
     const pageBottom = page.top + page.height
     if (pageBottom < startY) continue
-    if (page.top > endY) break
+    if (page.top > endY) break // 找到超出底部的直接 break，极大提升性能
     result.push(page)
   }
   return result
 })
 
-// 🚀 白屏杀手锏：只要 visiblePages 变化，立即强求 Vue 渲染真实的 Canvas
+// 内存回收优化
 watch(visiblePages, (newPages, oldPages) => {
   if (!newPages || newPages.length === 0) return;
 
-  // 1. 回收旧的页面内存
   const newIndices = new Set(newPages.map(p => p.id));
   if (oldPages) {
     oldPages.forEach(p => {
       if (!newIndices.has(p.id)) {
-        const orig = pages.value.find(o => o.id === p.id)
+        // 🚀 O(1) 索引替换原来的 find 查找，避免卡顿
+        const orig = pages.value[p.id - 1]
         if (orig) orig.rendered = false
         const task = renderTasks.get(p.id);
         if (task) { task.cancel(); renderTasks.delete(p.id); }
@@ -196,11 +185,12 @@ watch(visiblePages, (newPages, oldPages) => {
     });
   }
 
-  // 2. 将刚进入视野的页面绘制出来
   nextTick(() => {
     newPages.forEach(p => {
       if (!p.rendered && !renderTasks.has(p.id)) {
-        renderCanvas(p);
+        const canvasId = `pdf-canvas-${p.id}`
+        const canvas = document.getElementById(canvasId) as HTMLCanvasElement
+        if(canvas) renderCanvas(canvas, p);
       }
     })
   })
@@ -216,10 +206,6 @@ const currentPage = computed(() => {
   const page = pages.value.find(p => center >= p.top && center <= (p.top + p.height + PAGE_GAP))
   return page ? page.id : 1
 })
-
-// =======================================================
-// 🚀 加载与骨架构建
-// =======================================================
 
 const loadPdf = async (url: string) => {
   if (!url) return
@@ -241,73 +227,86 @@ const loadPdf = async (url: string) => {
   }
 }
 
-// 轮询等待宽度，然后算出包含 top 与 height 的骨架
+// 🚀 性能大爆炸优化：只拉取第 1 页的长宽，推算剩下所有页面的骨架坐标！(O(N) 变为 O(1))
 const buildPageSkeletons = async (retryCount = 0) => {
   if (!pdfProxy || !scrollContainer.value) return
   processing.value = true
 
   const containerW = scrollContainer.value.clientWidth - 40
-  // 必须等到容器被撑开，否则一直重试
   if (containerW <= 0) {
     if (retryCount < 50) setTimeout(() => buildPageSkeletons(retryCount + 1), 50)
     return
   }
   containerHeight.value = scrollContainer.value.clientHeight
+  lastWidth = containerW
 
   const newPages: PageData[] = []
   
+  // 仅获取第 1 页作为基准尺寸，免去海量异步请求
   const page1 = await pdfProxy.getPage(1)
   const baseViewport = page1.getViewport({ scale: 1 })
   const fitScale = Math.min(containerW / baseViewport.width, 1.8) 
   globalScale.value = fitScale
 
+  const defaultViewport = page1.getViewport({ scale: fitScale })
+  const defaultWidth = defaultViewport.width
+  const defaultHeight = defaultViewport.height
+
   let currentTop = PAGE_GAP
 
-  // 🚀 为每一页计算出绝对的 Top 与 Height，并推入数组
+  // 直接批量填充假定数据，1000 页也只需 1 毫秒
   for (let i = 1; i <= totalPages.value; i++) {
-    const p = await pdfProxy.getPage(i)
-    const vp = p.getViewport({ scale: fitScale })
     newPages.push({ 
       id: i, 
-      width: vp.width, 
-      height: vp.height, 
-      top: currentTop, // 这个保证了绝对定位
-      viewport: vp, 
+      width: defaultWidth, 
+      height: defaultHeight, 
+      top: currentTop, 
+      viewport: defaultViewport, 
       rendered: false 
     })
-    currentTop += vp.height + PAGE_GAP
+    currentTop += defaultHeight + PAGE_GAP
   }
   
   pages.value = newPages
-  totalHeight.value = currentTop // 这个保证了滚动条的出现
+  totalHeight.value = currentTop
   processing.value = false
 }
 
-// 执行 PDF.js 的页面渲染
-const renderCanvas = async (pageInfo: PageData) => {
+const mountCanvas = (el: any, pageInfo: PageData) => {
+  const canvas = el as HTMLCanvasElement;
+  if (canvas && !pageInfo.rendered && !renderTasks.has(pageInfo.id)) {
+    renderCanvas(canvas, pageInfo);
+  }
+}
+
+// 渲染真实页面
+const renderCanvas = async (canvas: HTMLCanvasElement, pageInfo: PageData) => {
   if (!pdfProxy) return
   
-  const canvasId = `pdf-canvas-${pageInfo.id}`
-  const canvas = document.getElementById(canvasId) as HTMLCanvasElement
-  // 防御性拦截：如果因为页面切换太快 DOM 还不在，就放弃渲染
-  if (!canvas) return
-
   renderTasks.set(pageInfo.id, true)
-  const origPage = pages.value.find(p => p.id === pageInfo.id)
+  const origPage = pages.value[pageInfo.id - 1]
   
   try {
     const page = await pdfProxy.getPage(pageInfo.id)
     const dpr = window.devicePixelRatio || 1
-    canvas.width = pageInfo.width * dpr
-    canvas.height = pageInfo.height * dpr
+    
+    // 🚀 在真实渲染时，拉取这一页真实的尺寸覆盖之前的推测尺寸
+    const actualViewport = page.getViewport({ scale: globalScale.value })
+
+    canvas.width = actualViewport.width * dpr
+    canvas.height = actualViewport.height * dpr
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
-    const renderCtx = { canvasContext: ctx, viewport: pageInfo.viewport, transform: [dpr, 0, 0, dpr, 0, 0] }
+    const renderCtx = { canvasContext: ctx, viewport: actualViewport, transform: [dpr, 0, 0, dpr, 0, 0] }
     await page.render(renderCtx).promise
     
-    // 渲染成功后，更新状态，让热区盖上来
-    if (origPage) origPage.rendered = true
+    if (origPage) {
+        origPage.rendered = true
+        // 万一这页尺寸确实和第一页不同，更新热区图层参照的宽高度
+        origPage.width = actualViewport.width
+        origPage.height = actualViewport.height
+    }
   } catch (err: any) {
     if (err.name !== 'RenderingCancelledException') console.warn(`Render Page ${pageInfo.id} failed:`, err)
     if (origPage) origPage.rendered = false
@@ -316,15 +315,11 @@ const renderCanvas = async (pageInfo: PageData) => {
   }
 }
 
-// =======================================================
-// 暴露给外部的 API
-// =======================================================
-
 const highlightBlock = (pageIndex: number, bbox: any) => {
   if (!scrollContainer.value) return
   highlightTarget.value = { pageIndex, bbox }
   
-  const pageNode = pages.value.find(p => p.id === pageIndex)
+  const pageNode = pages.value[pageIndex - 1]
   if (pageNode) {
     let blockY = 0
     if (bbox && bbox.length === 4) {
@@ -334,30 +329,42 @@ const highlightBlock = (pageIndex: number, bbox: any) => {
     const targetScroll = pageNode.top + (blockY * s) - (containerHeight.value / 3)
     
     scrollContainer.value.scrollTo({ top: Math.max(0, targetScroll), behavior: 'smooth' })
-    
     setTimeout(() => { highlightTarget.value = null }, 3000)
   }
 }
 
-// 重启大小监视：用于在浏览器窗口大小改变时重绘
-let resizeTimeout: any = null
-const handleResize = () => {
-  clearTimeout(resizeTimeout)
-  resizeTimeout = setTimeout(() => {
-    if (pdfProxy && scrollContainer.value && scrollContainer.value.clientWidth > 0) {
-      buildPageSkeletons()
-    }
-  }, 200)
+function debounceResize(fn: any, delay: number) {
+  let timeoutId: any;
+  return (...args: any[]) => {
+    clearTimeout(timeoutId)
+    timeoutId = setTimeout(() => fn(...args), delay)
+  }
 }
 
+let resizeObserver: ResizeObserver | null = null
+
 onMounted(() => {
-  window.addEventListener('resize', handleResize)
+  if (scrollContainer.value) {
+    const handleResize = debounceResize(() => {
+      if (!scrollContainer.value) return
+      const currentWidth = scrollContainer.value.clientWidth
+      
+      if (currentWidth > 0 && Math.abs(currentWidth - lastWidth) > 2) {
+        if (!processing.value && pdfProxy) buildPageSkeletons()
+      } else if (currentWidth > 0) {
+        containerHeight.value = scrollContainer.value.clientHeight
+      }
+    }, 200)
+
+    resizeObserver = new ResizeObserver(handleResize)
+    resizeObserver.observe(scrollContainer.value)
+  }
 })
 
 watch(() => props.src, (url) => { if(url) loadPdf(url) }, { immediate: true })
 
 onUnmounted(() => {
-  window.removeEventListener('resize', handleResize)
+  if (resizeObserver) resizeObserver.disconnect()
   if (pdfProxy) { pdfProxy.destroy(); pdfProxy = null }
   renderTasks.clear()
 })
@@ -369,5 +376,5 @@ defineExpose({ highlightBlock })
 .custom-scrollbar::-webkit-scrollbar { width: 8px; }
 .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
 .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; background-clip: content-box; border: 2px solid transparent;}
-.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
 </style>
