@@ -113,10 +113,10 @@
                </div>
             </div>
             <h2 class="text-xl font-semibold text-red-700 mb-2">
-               {{ task.status === 'failed' ? $t('status.failed') : $t('status.cancelled') }}
+                {{ task.status === 'failed' ? $t('status.failed') : $t('status.cancelled') }}
             </h2>
             <div class="text-red-600 bg-white p-4 rounded-lg border border-red-200 font-mono text-sm text-left overflow-auto max-h-64 break-all shadow-sm">
-               {{ task.error_message || 'Unknown error occurred' }}
+                {{ task.error_message || 'Unknown error occurred' }}
             </div>
             
             <div class="mt-6 flex justify-center gap-3">
@@ -152,81 +152,83 @@
         </div>
       </div>
 
-      <div v-else class="h-full flex flex-col">
-        <div :class="['flex-1 min-h-0 grid gap-4 h-full', layoutMode === 'split' ? 'grid-cols-2' : 'grid-cols-1']">
+      <div v-else class="h-full w-full flex flex-row gap-4">
+        
+        <div v-if="showPdf" 
+             :class="['card p-0 flex flex-col h-full border border-gray-200 relative shadow-sm min-w-0 transition-all duration-300', 
+                      layoutMode === 'split' ? 'flex-1 basis-1/2' : 'flex-1 basis-full']">
+          <div class="bg-gray-50 px-3 py-2 border-b border-gray-200 flex justify-between items-center shrink-0">
+            <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">{{ $t('task.sourceDocPreview') }}</span>
+            <a v-if="pdfUrl" :href="pdfUrl" target="_blank" class="text-xs text-primary-600 hover:underline flex items-center">
+              {{ $t('common.openInNewWindow') }} <ExternalLink class="w-3 h-3 ml-1"/>
+            </a>
+          </div>
           
-          <div v-if="showPdf" class="card p-0 overflow-hidden flex flex-col h-full border-r border-gray-200 relative shadow-sm">
-            <div class="bg-gray-50 px-3 py-2 border-b border-gray-200 flex justify-between items-center">
-              <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">{{ $t('task.sourceDocPreview') }}</span>
-              <a v-if="pdfUrl" :href="pdfUrl" target="_blank" class="text-xs text-primary-600 hover:underline flex items-center">
-                {{ $t('common.openInNewWindow') }} <ExternalLink class="w-3 h-3 ml-1"/>
-              </a>
-            </div>
-            
-            <div class="flex-1 bg-gray-200 relative overflow-hidden">
-              <VirtualPdfViewer
-                ref="pdfViewerRef"
-                :src="pdfUrl"
-                :layout-data="layoutData"
-                @scroll="handlePdfScroll"
-                @block-click="handleBlockClick"
-              />
-              <div v-if="!pdfUrl" class="absolute inset-0 flex items-center justify-center text-gray-400">
-                {{ $t('task.noPreview') }}
-              </div>
+          <div class="flex-1 bg-gray-200 relative overflow-hidden min-h-0">
+            <VirtualPdfViewer
+              ref="pdfViewerRef"
+              :src="pdfUrl"
+              :layout-data="layoutData"
+              @scroll="handlePdfScroll"
+              @block-click="handleBlockClick"
+            />
+            <div v-if="!pdfUrl" class="absolute inset-0 flex items-center justify-center text-gray-400">
+              {{ $t('task.noPreview') }}
             </div>
           </div>
+        </div>
 
-          <div v-if="showMarkdown" class="card p-0 overflow-hidden flex flex-col h-full shadow-sm">
-            <div class="bg-gray-50 px-3 py-2 border-b border-gray-200 flex justify-between items-center">
-              <div class="flex items-center bg-gray-200 rounded p-0.5">
-                <button @click="activeTab = 'markdown'" :class="['tab-btn', activeTab==='markdown' ? 'active' : '']">Markdown</button>
-                <button @click="activeTab = 'json'" :class="['tab-btn', activeTab==='json' ? 'active' : '']">JSON</button>
-              </div>
-              <button @click="downloadMarkdown" class="text-xs text-primary-600 hover:underline flex items-center">
-                <Download class="w-3 h-3 mr-1"/> {{ $t('common.download') }}
-              </button>
+        <div v-if="showMarkdown" 
+             :class="['card p-0 flex flex-col h-full shadow-sm border border-gray-200 min-w-0 transition-all duration-300', 
+                      layoutMode === 'split' ? 'flex-1 basis-1/2' : 'flex-1 basis-full']">
+          <div class="bg-gray-50 px-3 py-2 border-b border-gray-200 flex justify-between items-center shrink-0">
+            <div class="flex items-center bg-gray-200 rounded p-0.5">
+              <button @click="activeTab = 'markdown'" :class="['tab-btn', activeTab==='markdown' ? 'active' : '']">Markdown</button>
+              <button @click="activeTab = 'json'" :class="['tab-btn', activeTab==='json' ? 'active' : '']">JSON</button>
             </div>
-            
-            <div 
-              ref="markdownContainerRef"
-              class="flex-1 overflow-auto bg-white relative custom-scrollbar p-6 scroll-smooth"
-              @scroll="handleMarkdownScroll"
-            >
-              <div v-if="activeTab === 'markdown'">
-                <div v-if="layoutData.length > 0" class="prose max-w-none text-sm text-gray-700">
-                  <div 
-                    v-for="block in layoutData" 
-                    :key="block.id"
-                    :id="`block-${block.id}`"
-                    :data-id="block.id"
-                    @click="handleMarkdownClick(block)"
-                    :class="['mb-4 p-3 rounded-md transition-all cursor-pointer border', 
-                             activeBlockId === block.id 
-                               ? 'bg-yellow-50 border-yellow-300 shadow-sm ring-1 ring-yellow-100' 
-                               : 'border-transparent hover:bg-gray-50 hover:border-gray-200']"
-                  >
-                    <div v-if="block.type === 'image'" class="text-gray-400 text-xs italic mb-1 flex items-center gap-1 select-none">
-                      <Image class="w-3 h-3"/> [Image Content]
-                    </div>
-                    <div v-else-if="block.type === 'table'" class="text-gray-400 text-xs italic mb-1 flex items-center gap-1 select-none">
-                      <Table class="w-3 h-3"/> [Table Content]
-                    </div>
-                    
-                    <div class="whitespace-pre-wrap leading-relaxed">{{ block.text }}</div>
+            <button @click="downloadMarkdown" class="text-xs text-primary-600 hover:underline flex items-center">
+              <Download class="w-3 h-3 mr-1"/> {{ $t('common.download') }}
+            </button>
+          </div>
+          
+          <div 
+            ref="markdownContainerRef"
+            class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden bg-white relative custom-scrollbar p-6 scroll-smooth"
+            @scroll="handleMarkdownScroll"
+          >
+            <div v-if="activeTab === 'markdown'" class="w-full">
+              <div v-if="layoutData.length > 0" class="prose prose-sm max-w-none text-gray-700 break-words">
+                <div 
+                  v-for="block in layoutData" 
+                  :key="block.id"
+                  :id="`block-${block.id}`"
+                  :data-id="block.id"
+                  @click="handleMarkdownClick(block)"
+                  :class="['mb-4 p-3 rounded-md transition-colors cursor-pointer border break-words w-full', 
+                           activeBlockId === block.id 
+                             ? 'bg-yellow-50 border-yellow-300 shadow-sm ring-1 ring-yellow-100' 
+                             : 'border-transparent hover:bg-gray-50 hover:border-gray-200']"
+                >
+                  <div v-if="block.type === 'image'" class="text-gray-400 text-xs italic mb-1 flex items-center gap-1 select-none">
+                    <Image class="w-3 h-3"/> [Image Content]
                   </div>
+                  <div v-else-if="block.type === 'table'" class="text-gray-400 text-xs italic mb-1 flex items-center gap-1 select-none">
+                    <Table class="w-3 h-3"/> [Table Content]
+                  </div>
+                  
+                  <div class="whitespace-pre-wrap leading-relaxed max-w-full overflow-hidden">{{ block.text }}</div>
                 </div>
-                
-                <MarkdownViewer v-else :content="task.data?.content || ''" />
               </div>
               
-              <div v-else class="h-full">
-                <JsonViewer :data="task.data?.json_content || {}" />
-              </div>
+              <MarkdownViewer v-else :content="task.data?.content || ''" />
+            </div>
+            
+            <div v-else class="h-full w-full">
+              <JsonViewer :data="task.data?.json_content || {}" />
             </div>
           </div>
-
         </div>
+
       </div>
     </div>
 
@@ -285,16 +287,12 @@ const layoutData = computed(() => {
   const jsonContent = task.value?.data?.json_content
   if (!jsonContent) return []
   
-  // 如果已经是数组，直接返回
   if (Array.isArray(jsonContent)) return jsonContent 
   
-  // MinerU 标准格式： { pages: [ { blocks: [...] }, ... ] }
   if (jsonContent.pages && Array.isArray(jsonContent.pages)) {
       return jsonContent.pages.flatMap((p: any) => {
           return (p.blocks || []).map((b: any) => ({
               ...b,
-              // 兼容：优先使用 block 的 page_idx，其次使用 page 的 page_id
-              // 注意：MinerU 输出通常是 0-based，但有时会有不一致，统一转为 0-based
               page_idx: b.page_idx ?? (typeof p.page_id === 'number' ? p.page_id - 1 : 0)
           }))
       })
@@ -302,18 +300,41 @@ const layoutData = computed(() => {
   return []
 })
 
-// --- 同步滚动逻辑 (Bi-directional Sync) ---
+// =======================================================
+// 强制触发 PDF 重绘机制（解决左侧空白需要滑动才显示的问题）
+// =======================================================
+const triggerPdfResize = () => {
+  nextTick(() => {
+    setTimeout(() => {
+      window.dispatchEvent(new Event('resize'))
+    }, 300) // 延迟确保 DOM 已经完全展开
+  })
+}
+
+// 监听布局变化或任务加载完毕，触发重绘
+watch([layoutMode, showPdf], () => {
+  if (showPdf.value) triggerPdfResize()
+})
+
+watch(() => task.value?.status, (newStatus, oldStatus) => {
+  if (newStatus === 'completed' && oldStatus !== 'completed') {
+    triggerPdfResize()
+  }
+})
+
+// =======================================================
+// 同步滚动逻辑 (Bi-directional Sync)
+// =======================================================
 let isSyncingLeft = false
 let isSyncingRight = false
 let syncTimeout: any = null
 
-// 清除同步锁，防抖
 const clearSyncLock = () => {
     clearTimeout(syncTimeout)
     syncTimeout = setTimeout(() => {
         isSyncingLeft = false
         isSyncingRight = false
-    }, 100) // 100ms 延迟足够处理平滑滚动
+    }, 150) // 增加延迟防止动画冲突
 }
 
 // 1. PDF 滚动 -> 带动 Markdown
@@ -327,7 +348,6 @@ const handlePdfScroll = ({ scrollTop, scrollHeight, clientHeight }: any) => {
   const ratio = scrollTop / maxScroll
   const md = markdownContainerRef.value
   
-  // 计算右侧对应的 scrollTop
   md.scrollTop = ratio * (md.scrollHeight - md.clientHeight)
   
   clearSyncLock()
@@ -344,13 +364,16 @@ const handleMarkdownScroll = (e: Event) => {
   isSyncingRight = true
   const ratio = target.scrollTop / maxScroll
   
-  // 调用子组件方法进行百分比滚动
-  pdfViewerRef.value.scrollToPercentage(ratio)
+  if (typeof pdfViewerRef.value.scrollToPercentage === 'function') {
+    pdfViewerRef.value.scrollToPercentage(ratio)
+  }
   
   clearSyncLock()
 }
 
-// --- 双向精准定位 (Bi-directional Positioning) ---
+// =======================================================
+// 双向精准定位 (Bi-directional Positioning)
+// =======================================================
 
 // 1. 点击 PDF 某块 -> 右侧 Markdown 跳转并高亮
 const handleBlockClick = (block: any) => {
@@ -358,19 +381,16 @@ const handleBlockClick = (block: any) => {
   
   activeBlockId.value = block.id
   
-  // 查找对应的 DOM 元素
   const elementId = `block-${block.id}`
   const el = document.getElementById(elementId)
   
   if (el) {
-    // 临时关闭同步，防止 scrollIntoView 触发 scroll 事件导致死循环
     const oldSync = syncScroll.value
-    syncScroll.value = false
+    syncScroll.value = false // 临时切断同步，防止死锁
     
     el.scrollIntoView({ behavior: 'smooth', block: 'center' })
     
-    // 延时恢复同步，等待滚动动画结束
-    setTimeout(() => { syncScroll.value = oldSync }, 1000)
+    setTimeout(() => { syncScroll.value = oldSync }, 800)
   }
 }
 
@@ -383,16 +403,18 @@ const handleMarkdownClick = (block: any) => {
   const oldSync = syncScroll.value
   syncScroll.value = false
 
-  // 转换页码：PDF.js 使用 1-based index
   const pageIndex = (typeof block.page_idx === 'number' ? block.page_idx : block.page_id) + 1
   
-  // 调用 PDF 组件的高亮接口
-  pdfViewerRef.value.highlightBlock(pageIndex, block.bbox)
+  if (typeof pdfViewerRef.value.highlightBlock === 'function') {
+    pdfViewerRef.value.highlightBlock(pageIndex, block.bbox)
+  }
   
-  setTimeout(() => { syncScroll.value = oldSync }, 1000)
+  setTimeout(() => { syncScroll.value = oldSync }, 800)
 }
 
-// --- Actions & Data Loading ---
+// =======================================================
+// Actions & Data Loading
+// =======================================================
 
 const setMode = (mode: 'single' | 'split') => layoutMode.value = mode
 
@@ -403,6 +425,7 @@ async function refreshTask() {
   error.value = ''
   try {
     await taskStore.fetchTaskStatus(taskId.value, false, 'both')
+    triggerPdfResize() // 数据刷新后保证PDF容器计算正确
   } catch (err: any) {
     error.value = err.message || t('task.loadFailed')
   } finally {
@@ -415,6 +438,7 @@ function startPolling() {
   stopPolling = taskStore.pollTaskStatus(taskId.value, 3000, (updatedTask) => {
     if (['completed', 'failed', 'cancelled'].includes(updatedTask.status)) {
       if (stopPolling) stopPolling()
+      if (updatedTask.status === 'completed') triggerPdfResize()
     }
   })
 }
@@ -476,6 +500,8 @@ onMounted(async () => {
   await refreshTask()
   if (task.value && ['pending', 'processing'].includes(task.value.status)) {
     startPolling()
+  } else {
+    triggerPdfResize() // 页面挂载完成即刻补偿一次重绘
   }
 })
 
