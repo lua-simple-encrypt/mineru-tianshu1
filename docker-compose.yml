@@ -1,5 +1,5 @@
 # Tianshu (天枢) - Production Docker Compose
-# 终极优化版：相对路径挂载 + Paddle自动下载持久化 + 权限修复 + 任务调度 + VLLM互斥 + 日志静默防刷屏 + 大图显存溢出修复 + 并发限流
+# 终极优化版：单任务串行 + 低显存占用 + 权限修复 + 任务调度 + VLLM互斥
 
 name: tianshu
 
@@ -174,14 +174,14 @@ services:
       - GLOG_minloglevel=2
       - VLLM_LOGGING_LEVEL=ERROR
       - PYTHONWARNINGS=ignore
-    # ⬇️ 关键优化：调低显存占用至 0.85，将 image limit 设为 1 以匹配串行处理逻辑
+    # ⬇️ [优化] 显存降至 0.6，防止卡顿；限制单次处理 1 张图
     command: >
       --model /root/.paddlex/official_models/PaddleOCR-VL-1.5-0.9B
       --served-model-name PaddleOCR-VL-1.5-0.9B
       --trust-remote-code
       --host 0.0.0.0
       --port 30023
-      --gpu-memory-utilization 0.85
+      --gpu-memory-utilization 0.6
       --max-model-len 8192
       --max-num-batched-tokens 8192
       --enforce-eager
@@ -220,13 +220,14 @@ services:
       - GLOG_minloglevel=2
       - VLLM_LOGGING_LEVEL=ERROR
       - PYTHONWARNINGS=ignore
+    # ⬇️ [优化] 显存降至 0.6，防止卡顿；限制单次处理 1 张图
     command: >
       --model /models/MinerU2.5-2509-1.2B
       --served-model-name MinerU-1.2B
       --trust-remote-code
       --host 0.0.0.0
       --port 30024
-      --gpu-memory-utilization 0.85
+      --gpu-memory-utilization 0.6
       --max-model-len 8192
       --max-num-batched-tokens 8192
       --enforce-eager
@@ -280,7 +281,8 @@ services:
       - HOST=0.0.0.0
       - WORKER_PORT=8001
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      # ✅ 限制 Worker 并发，配合 vLLM 的配置
+      # ⬇️ [核心优化] 强制单任务串行
+      - MAX_CONCURRENT_TASKS=1
       - WORKER_GPUS=1
       - MAX_BATCH_SIZE=1
       - MODEL_PATH=/app/models
