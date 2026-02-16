@@ -5,7 +5,10 @@ PaddleOCR-VL-VLLM 解析引擎 (Optimized)
 🚨 CRITICAL FIX APPLIED: 
 强制单线程推理以解决 vLLM Tokenizer "Already borrowed" 竞态崩溃问题。
 
-参考文档：https://www.paddleocr.ai/latest/version3.x/pipeline_usage/PaddleOCR-VL.html
+优化日志 (2026-02-15):
+1. [新增] 智能显存休眠 (Auto-Sleep): 空闲 5 分钟自动释放显存
+2. [新增] 自动唤醒 (Auto-Wakeup): 新请求自动加载模型
+3. [优化] 移除单次任务后的强制清理，大幅提升批量处理性能
 """
 
 import os
@@ -14,6 +17,7 @@ import json
 import time
 import requests
 import traceback
+import threading
 from pathlib import Path
 from typing import Optional, Dict, Any
 from threading import Lock
@@ -34,8 +38,7 @@ class PaddleOCRVLVLLMEngine:
 
     特性：
     - 稳定优先：强制串行请求，消除底层 Rust Tokenizer 崩溃
-    - 自动多语言：支持 109+ 种语言自动识别
-    - 显存保护：流式处理 + 激进的 GC 策略
+    - 智能显存管理：空闲自动释放，使用时自动加载
     - 故障隔离：预检查 VLLM 服务状态
     """
 
@@ -80,12 +83,26 @@ class PaddleOCRVLVLLMEngine:
                 self.gpu_id = 0
 
             self._check_gpu_availability()
+            
+            # =========================================================
+            # [新增] 智能显存管理状态变量
+            # =========================================================
+            self.last_active_time = time.time()
+            self.is_processing = False
+            self.is_offloaded = True 
+            self.idle_timeout = 300  # 5分钟无操作自动卸载
+
+            # 启动监控线程
+            self._monitor_thread = threading.Thread(target=self._auto_sleep_monitor, daemon=True)
+            self._monitor_thread.start()
+
             self._initialized = True
 
             logger.info("🔧 PaddleOCR-VL-VLLM Engine Initialized")
             logger.info(f"   Device: {self.device} (Physical GPU: {self.gpu_id})")
             logger.info(f"   VLLM API: {self.vllm_api_base}")
             logger.info(f"   Concurrency: Serial Mode (Safe)")
+            logger.info(f"   Auto-Sleep: Enabled ({self.idle_timeout}s)")
 
     def _check_gpu_availability(self):
         try:
@@ -118,6 +135,23 @@ class PaddleOCRVLVLLMEngine:
         except Exception as e:
             logger.warning(f"⚠️ VLLM service check failed: {e}")
             return False
+
+    def _auto_sleep_monitor(self):
+        """
+        [后台线程] 监控空闲状态
+        """
+        while True:
+            time.sleep(10)
+            try:
+                if self.is_processing or self.is_offloaded:
+                    continue
+                
+                if time.time() - self.last_active_time > self.idle_timeout:
+                    logger.info(f"💤 PaddleOCR-VLLM idle for {self.idle_timeout}s. Unloading pipeline...")
+                    self.cleanup()
+                    self.is_offloaded = True
+            except Exception as e:
+                logger.error(f"Monitor error: {e}")
 
     def _load_pipeline(self):
         """延迟加载管道"""
@@ -164,66 +198,78 @@ class PaddleOCRVLVLLMEngine:
 
     def cleanup(self):
         """激进的显存清理"""
-        try:
-            import paddle
-            if paddle.device.is_compiled_with_cuda():
-                paddle.device.cuda.empty_cache()
-            gc.collect()
-        except:
-            pass
+        with self._lock:
+            self._pipeline = None # 释放引用
+            try:
+                import paddle
+                if paddle.device.is_compiled_with_cuda():
+                    paddle.device.cuda.empty_cache()
+                gc.collect()
+                logger.info("✅ VRAM released.")
+            except:
+                pass
 
     def parse(self, file_path: str, output_path: str, **kwargs) -> Dict[str, Any]:
         """
-        解析文档入口
+        解析文档入口 (增强版：自动唤醒 + 状态维护)
         """
-        file_path = Path(file_path)
-        output_path = Path(output_path)
-        output_path.mkdir(parents=True, exist_ok=True)
-
-        logger.info(f"🤖 Processing: {file_path.name}")
+        # =========================================================
+        # 1. 状态更新与自动唤醒
+        # =========================================================
+        self.is_processing = True
+        self.last_active_time = time.time()
         
-        pipeline = self._load_pipeline()
-
-        # 参数映射
-        param_mapping = {
-            "useDocOrientationClassify": "use_doc_orientation_classify",
-            "useDocUnwarping": "use_doc_unwarping",
-            "useLayoutDetection": "use_layout_parsing",
-            "useChartRecognition": "use_chart_recognition",
-            "useSealRecognition": "use_seal_recognition",
-            "useOcrForImageBlock": "use_ocr_for_image_block",
-            "layoutNms": "layout_nms",
-            "markdownIgnoreLabels": "markdown_ignore_labels",
-            "mergeTables": "merge_tables",
-            "relevelTitles": "relevel_titles",
-            "restructurePages": "restructure_pages",
-            "minPixels": "min_pixels",
-            "maxPixels": "max_pixels",
-        }
-
-        predict_params = {"input": str(file_path)}
-        
-        # 默认参数
-        defaults = {
-            "use_layout_parsing": True,
-            "use_doc_orientation_classify": False,  # 默认关闭以防崩溃
-            "use_doc_unwarping": False,
-            "use_seal_recognition": True
-        }
-        
-        # 填充参数
-        for k, v in kwargs.items():
-            if k in param_mapping:
-                predict_params[param_mapping[k]] = v
-        
-        for k, v in defaults.items():
-            if k not in predict_params:
-                predict_params[k] = v
+        if self.is_offloaded:
+            logger.info("🚀 New task received. Waking up PaddleOCR-VLLM engine...")
+            self.is_offloaded = False
+            # _load_pipeline() 会自动重建
 
         try:
+            file_path = Path(file_path)
+            output_path = Path(output_path)
+            output_path.mkdir(parents=True, exist_ok=True)
+
+            logger.info(f"🤖 Processing: {file_path.name}")
+            
+            pipeline = self._load_pipeline()
+
+            # 参数映射
+            param_mapping = {
+                "useDocOrientationClassify": "use_doc_orientation_classify",
+                "useDocUnwarping": "use_doc_unwarping",
+                "useLayoutDetection": "use_layout_parsing",
+                "useChartRecognition": "use_chart_recognition",
+                "useSealRecognition": "use_seal_recognition",
+                "useOcrForImageBlock": "use_ocr_for_image_block",
+                "layoutNms": "layout_nms",
+                "markdownIgnoreLabels": "markdown_ignore_labels",
+                "mergeTables": "merge_tables",
+                "relevelTitles": "relevel_titles",
+                "restructurePages": "restructure_pages",
+                "minPixels": "min_pixels",
+                "maxPixels": "max_pixels",
+            }
+
+            predict_params = {"input": str(file_path)}
+            
+            # 默认参数
+            defaults = {
+                "use_layout_parsing": True,
+                "use_doc_orientation_classify": False,  # 默认关闭以防崩溃
+                "use_doc_unwarping": False,
+                "use_seal_recognition": True
+            }
+            
+            # 填充参数
+            for k, v in kwargs.items():
+                if k in param_mapping:
+                    predict_params[param_mapping[k]] = v
+            
+            for k, v in defaults.items():
+                if k not in predict_params:
+                    predict_params[k] = v
+
             # 🚀 执行推理
-            # 注意：由于我们在文件头设置了 PARALLEL_WORKER_NUM=1
-            # 这里即使是大文件，也会一页页串行发送给 VLLM，不会再触发 400 错误
             output_generator = pipeline.predict(**predict_params)
 
             markdown_pages = []
@@ -234,7 +280,7 @@ class PaddleOCRVLVLLMEngine:
             for res in output_generator:
                 page_count += 1
                 
-                # 🛡️ 防御性检查：防止 NoneType 错误
+                # 🛡️ 防御性检查
                 if res is None:
                     logger.error(f"❌ Page {page_count} returned None result")
                     continue
@@ -322,7 +368,14 @@ class PaddleOCRVLVLLMEngine:
             logger.error(traceback.format_exc())
             raise
         finally:
-            self.cleanup()
+            # =========================================================
+            # [关键修改]
+            # 移除强制 cleanup()，让模型保持加载状态
+            # 更新时间戳，让后台线程在空闲5分钟后处理释放
+            # =========================================================
+            self.is_processing = False
+            self.last_active_time = time.time()
+            logger.info("🏁 Task finished. Pipeline remains loaded for fast reuse.")
 
 # 全局单例
 _engine = None
