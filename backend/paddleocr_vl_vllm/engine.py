@@ -3,9 +3,9 @@ PaddleOCR-VL-VLLM 解析引擎 (Optimized + Bidirectional Layout Support)
 单例模式，每个进程只加载一次基础版面识别模型, OCR部分调用配置的API
 
 功能增强 (2026-02-15):
-1. [修复] 双向精准定位：提取每个文本块的 bbox 并输出扁平化结构数据
-2. [新增] 智能显存休眠 (Auto-Sleep): 空闲 5 分钟自动释放显存
-3. [新增] 自动唤醒 (Auto-Wakeup): 新请求自动加载模型
+1. [修复] 严格过滤 vLLM 请求参数，修复 'NoneType object is not subscriptable' 错误
+2. [双向定位] 输出包含 bbox 的结构化数据 (json_content)
+3. [资源管理] 智能显存休眠 (Auto-Sleep) 和自动唤醒 (Auto-Wakeup)
 4. [稳定性] 强制单线程推理以解决 vLLM Tokenizer 竞态崩溃
 """
 
@@ -196,9 +196,25 @@ class PaddleOCRVLVLLMEngine:
             output_path = Path(output_path)
             output_path.mkdir(parents=True, exist_ok=True)
 
+            logger.info(f"🤖 Processing: {file_path.name}")
+
             pipeline = self._load_pipeline()
 
-            # 参数映射
+            # =========================================================
+            # [关键修复] 参数白名单过滤
+            # PaddleOCR VLLM 模式下不支持某些高级布局参数，传递它们会导致 crash
+            # 只允许以下参数通过
+            # =========================================================
+            allowed_params = {
+                "use_doc_orientation_classify",
+                "use_doc_unwarping",
+                "use_layout_parsing",
+                "use_chart_recognition",
+                "use_seal_recognition",
+                "use_ocr_for_image_block",
+            }
+            
+            # 参数映射 (保持与 Worker 一致)
             param_mapping = {
                 "useDocOrientationClassify": "use_doc_orientation_classify",
                 "useDocUnwarping": "use_doc_unwarping",
@@ -206,20 +222,26 @@ class PaddleOCRVLVLLMEngine:
                 "useChartRecognition": "use_chart_recognition",
                 "useSealRecognition": "use_seal_recognition",
                 "useOcrForImageBlock": "use_ocr_for_image_block",
-                "layoutNms": "layout_nms",
-                "markdownIgnoreLabels": "markdown_ignore_labels",
-                "mergeTables": "merge_tables",
-                "relevelTitles": "relevel_titles",
-                "restructurePages": "restructure_pages",
-                "minPixels": "min_pixels",
-                "maxPixels": "max_pixels",
             }
 
             predict_params = {"input": str(file_path)}
-            for k, v in kwargs.items():
-                if k in param_mapping:
-                    predict_params[param_mapping[k]] = v
             
+            # 1. 映射并过滤参数
+            for k, v in kwargs.items():
+                target_key = param_mapping.get(k, k) # 如果在映射表中则映射，否则保持原名
+                if target_key in allowed_params:
+                    predict_params[target_key] = v
+                else:
+                    # 记录被过滤的参数 (Debug用)
+                    logger.debug(f"ℹ️ Filtered param for VLLM mode: {k}={v}")
+            
+            # 2. 强制默认值 (VLLM 模式下某些功能必须关闭以防崩溃)
+            predict_params["use_layout_parsing"] = True
+            predict_params["use_doc_orientation_classify"] = False # 强制关闭
+            predict_params["use_doc_unwarping"] = False          # 强制关闭
+
+            logger.info(f"🚀 Starting inference with filtered params: {json.dumps(predict_params)}")
+
             # 执行推理
             output_generator = pipeline.predict(**predict_params)
 
