@@ -71,7 +71,7 @@
 
             <div 
               v-if="highlight && highlight.pageIndex === page.index"
-              class="absolute z-30 border-2 border-red-500 bg-red-500/20 animate-pulse pointer-events-none box-border rounded-[1px]"
+              class="absolute z-30 border-2 border-red-500 bg-red-500/20 animate-pulse pointer-events-none box-border rounded-[2px] shadow-[0_0_8px_rgba(239,68,68,0.5)]"
               :style="getBlockStyle(highlight.bbox)"
             ></div>
 
@@ -87,17 +87,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch, computed, shallowRef, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted, watch, computed, shallowRef } from 'vue'
 import * as pdfjsLib from 'pdfjs-dist'
 import pdfWorker from 'pdfjs-dist/build/pdf.worker?url'
 
-// 设置 Worker 全局配置
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker
 
-// --- Types & Props ---
 const props = defineProps<{
   src: string | null
-  layoutData?: any[] // [{id, page_idx, bbox: [x0,y0,x1,y1]}, ...]
+  layoutData?: any[] // 后端返回的扁平化 JSON
 }>()
 
 const emit = defineEmits<{
@@ -106,8 +104,6 @@ const emit = defineEmits<{
   (e: 'page-loaded', total: number): void
 }>()
 
-// --- Utilities ---
-// 简单的防抖函数
 function debounce<T extends (...args: any[]) => void>(fn: T, delay: number) {
   let timeoutId: ReturnType<typeof setTimeout>
   return (...args: Parameters<T>) => {
@@ -116,38 +112,30 @@ function debounce<T extends (...args: any[]) => void>(fn: T, delay: number) {
   }
 }
 
-// --- State ---
 const containerRef = ref<HTMLElement | null>(null)
 const pdfDoc = shallowRef<pdfjsLib.PDFDocumentProxy | null>(null)
 const pagesMetaData = ref<Array<{ index: number; width: number; height: number; top: number; viewport: any }>>([])
 
-// Layout State
 const totalHeight = ref(0)
 const scrollTop = ref(0)
 const containerHeight = ref(0)
 const totalPages = ref(0)
 const scale = ref(1.5)
-let lastWidth = 0 // 记录上一次的宽度，防止高度引起的无效重绘
+let lastWidth = 0 
 
-// Highlight State
-const highlight = ref<{ pageIndex: number; bbox: number[] } | null>(null)
+// 控制外部传入的闪烁红框
+const highlight = ref<{ pageIndex: number; bbox: any[] } | null>(null)
 
-// Loading Status
 const loading = ref(false)
 const processing = ref(false)
 const progress = ref(0)
 const error = ref<string | null>(null)
 
-// Caches
 const renderTasks = new Map<number, pdfjsLib.RenderTask>()
 const renderedPages = new Set<number>()
 
-// Constants
 const PAGE_GAP = 16 
 
-// --- Computed ---
-
-// 计算当前可视页码
 const currentPage = computed(() => {
   if (!pagesMetaData.value.length) return 0
   const center = scrollTop.value + (containerHeight.value / 2)
@@ -155,12 +143,10 @@ const currentPage = computed(() => {
   return page ? page.index : 1
 })
 
-// 按页码索引布局数据 (优化：添加 ?. 保护)
 const layoutDataMap = computed(() => {
   if (!props.layoutData) return {}
   const map: Record<number, any[]> = {}
   props.layoutData.forEach(block => {
-    // 兼容: layout.json page_idx 通常是 0-based，PDF.js page index 是 1-based
     const pageNum = (typeof block.page_idx === 'number' ? block.page_idx : block.page_id) + 1
     if (!map[pageNum]) map[pageNum] = []
     map[pageNum].push(block)
@@ -168,17 +154,14 @@ const layoutDataMap = computed(() => {
   return map
 })
 
-// 虚拟滚动核心：计算可视页面 (优化：Early Break 循环)
 const visiblePages = computed(() => {
   if (pagesMetaData.value.length === 0) return []
   
-  // 预加载视口上下各 1.5 屏的高度，提升快速滚动体验
   const startY = scrollTop.value - containerHeight.value * 1.5
   const endY = scrollTop.value + containerHeight.value * 2.5 
   
   const result = []
   
-  // 因为 pagesMetaData 是按 top 排序的，可以使用循环并在超出范围后 break
   for (const page of pagesMetaData.value) {
     const pageBottom = page.top + page.height
     if (pageBottom < startY) continue
@@ -189,24 +172,16 @@ const visiblePages = computed(() => {
       rendered: renderedPages.has(page.index)
     })
   }
-  
   return result
 })
 
-// --- Watchers ---
-
-// 资源回收：当页面移出视口时，取消渲染任务并移除缓存状态
 watch(visiblePages, (newPages, oldPages) => {
   if (!oldPages) return;
-  
   const newIndices = new Set(newPages.map(p => p.index));
   
   oldPages.forEach(p => {
     if (!newIndices.has(p.index)) {
-      // 1. 标记为未渲染
       renderedPages.delete(p.index);
-      
-      // 2. 强行取消正在进行的渲染任务
       const task = renderTasks.get(p.index);
       if (task) {
         task.cancel();
@@ -216,17 +191,13 @@ watch(visiblePages, (newPages, oldPages) => {
   });
 })
 
-// 监听源文件变化
 watch(() => props.src, (val) => {
   if (val) loadPdf(val)
 })
 
-// --- Methods ---
-
 const loadPdf = async (url: string) => {
   if (!url) return
   
-  // Reset
   if (pdfDoc.value) {
     pdfDoc.value.destroy()
     pdfDoc.value = null
@@ -260,7 +231,6 @@ const loadPdf = async (url: string) => {
     progress.value = 100
     URL.revokeObjectURL(objectUrl)
   } catch (err: any) {
-    console.error('PDF Load Error:', err)
     error.value = err.message || '无法加载文档'
   } finally {
     loading.value = false
@@ -271,17 +241,13 @@ const initLayout = async () => {
   if (!pdfDoc.value || !containerRef.value) return
   
   const containerW = containerRef.value.clientWidth
-  // 🚨【关键修复】：防止因页面尚未完全挂载（display:none 或外层未渲染完）导致 clientWidth 为 0 造成的白屏
+  // 解决初始白屏：宽度为 0 时延时等待 DOM
   if (containerW <= 0) {
-    setTimeout(() => {
-      if (pdfDoc.value) initLayout()
-    }, 100)
+    setTimeout(() => { if (pdfDoc.value) initLayout() }, 100)
     return
   }
 
   processing.value = true
-  
-  // 重新计算布局时，必须清除旧的渲染状态
   renderedPages.clear()
   renderTasks.forEach(t => t.cancel())
   renderTasks.clear()
@@ -290,11 +256,9 @@ const initLayout = async () => {
     containerHeight.value = containerRef.value.clientHeight
     lastWidth = containerW
     
-    // 获取第一页以计算缩放比例
     const page1 = await pdfDoc.value.getPage(1)
     const viewport = page1.getViewport({ scale: 1 })
     
-    // 留出 32px (左右 padding) + 滚动条空间，限制最大宽度
     const targetWidth = Math.min(containerW - 32, 1200) 
     const fitScale = targetWidth / viewport.width
     scale.value = fitScale
@@ -328,16 +292,12 @@ const initLayout = async () => {
 
 const renderPage = async (canvas: HTMLCanvasElement | null, pageMeta: any) => {
   if (!canvas || !pdfDoc.value) return
-  
-  // 防御性：避免同一个 Canvas 触发多次不必要的渲染
   if (renderedPages.has(pageMeta.index) || renderTasks.has(pageMeta.index)) return
 
   try {
-    // 立即标记占位，防止 Vue 生命周期并发调用
     renderedPages.add(pageMeta.index)
     
     const page = await pdfDoc.value.getPage(pageMeta.index)
-    
     const dpr = window.devicePixelRatio || 1
     canvas.width = pageMeta.width * dpr
     canvas.height = pageMeta.height * dpr
@@ -345,7 +305,6 @@ const renderPage = async (canvas: HTMLCanvasElement | null, pageMeta: any) => {
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
-    // 渲染任务
     const renderTask = page.render({
       canvasContext: ctx,
       viewport: pageMeta.viewport,
@@ -360,18 +319,35 @@ const renderPage = async (canvas: HTMLCanvasElement | null, pageMeta: any) => {
     if (err.name !== 'RenderingCancelledException') {
       console.warn(`Page ${pageMeta.index} render warning:`, err)
     }
-    // 渲染失败或被取消时，移除标记以便下次重新渲染
     renderedPages.delete(pageMeta.index)
   }
 }
 
-// 坐标转换：PDF 坐标 -> DOM 样式
-const getBlockStyle = (bbox: number[]) => {
-  if (!bbox || bbox.length < 4) return {}
-  const [x0, y0, x1, y1] = bbox
-  const w = x1 - x0
-  const h = y1 - y0
-  const s = scale.value 
+// 🚀 [核心修复] 完美兼容 PaddleOCR 的多种坐标系格式
+const getBlockStyle = (bbox: any) => {
+  if (!bbox || !Array.isArray(bbox) || bbox.length === 0) return { display: 'none' }
+  
+  let x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+  
+  // 格式 1: [x_min, y_min, x_max, y_max] (一般为版面分析 layout_bbox)
+  if (bbox.length === 4 && typeof bbox[0] === 'number') {
+    [x0, y0, x1, y1] = bbox as number[];
+  } 
+  // 格式 2: [[x1, y1], [x2, y2], [x3, y3], [x4, y4]] (一般为文本块 OCR 多边形坐标)
+  else if (bbox.length === 4 && Array.isArray(bbox[0])) {
+    const xs = bbox.map((p: number[]) => p[0]);
+    const ys = bbox.map((p: number[]) => p[1]);
+    x0 = Math.min(...xs);
+    y0 = Math.min(...ys);
+    x1 = Math.max(...xs);
+    y1 = Math.max(...ys);
+  } else {
+    return { display: 'none' }
+  }
+
+  const w = x1 - x0;
+  const h = y1 - y0;
+  const s = scale.value; 
   
   return {
     left: `${x0 * s}px`,
@@ -380,8 +356,6 @@ const getBlockStyle = (bbox: number[]) => {
     height: `${h * s}px`
   }
 }
-
-// --- Public API ---
 
 const onScroll = (e: Event) => {
   const target = e.target as HTMLElement
@@ -393,45 +367,47 @@ const onScroll = (e: Event) => {
   })
 }
 
-// API: 滚动到指定百分比 (Phase 4)
+// 暴露 API 1：同步百分比滚动
 const scrollToPercentage = (percentage: number) => {
   if (!containerRef.value) return
   const targetTop = percentage * (containerRef.value.scrollHeight - containerRef.value.clientHeight)
-  // 使用 auto 避免同步时的延迟累积
   containerRef.value.scrollTo({ top: targetTop, behavior: 'auto' }) 
 }
 
-// API: 高亮并跳转到指定区域 (Phase 5)
-const highlightBlock = (pageIndex: number, bbox: number[]) => {
+// 暴露 API 2：高亮并滚动到 PDF 的红框区域
+const highlightBlock = (pageIndex: number, bbox: any) => {
   if (!containerRef.value) return
   
   highlight.value = { pageIndex, bbox }
   
   const pageMeta = pagesMetaData.value.find(p => p.index === pageIndex)
   if (pageMeta) {
+    // 兼容取 Y 轴坐标用于定位
+    let blockY = 0;
+    if (bbox && bbox.length === 4) {
+       blockY = Array.isArray(bbox[0]) ? Math.min(...bbox.map((p:any) => p[1])) : bbox[1];
+    }
+    
     const s = scale.value
-    const blockY = bbox[1] * s
-    // 滚动到该元素，稍微居中一点
-    const targetScroll = pageMeta.top + blockY - (containerHeight.value / 3)
+    // 计算滚动高度，并放在视口偏上的位置
+    const targetScroll = pageMeta.top + (blockY * s) - (containerHeight.value / 3)
     
     containerRef.value.scrollTo({
-      top: targetScroll,
+      top: Math.max(0, targetScroll),
       behavior: 'smooth'
     })
     
-    // 3秒后自动清除高亮
+    // 3秒后自动清除红色脉冲高亮
     setTimeout(() => { highlight.value = null }, 3000)
   }
 }
 
 const retry = () => { if (props.src) loadPdf(props.src) }
 
-// --- Lifecycle ---
 let resizeObserver: ResizeObserver | null = null
 
 onMounted(() => {
   if (containerRef.value) {
-    // 🚨【关键修复】：只有在宽度真正发生变化时才触发重绘，防止循环重绘
     const handleResize = debounce(() => {
       if (!containerRef.value) return
       const currentWidth = containerRef.value.clientWidth
@@ -440,7 +416,6 @@ onMounted(() => {
            initLayout()
         }
       } else if (currentWidth > 0) {
-        // 如果只是高度变化，仅更新高度参考值供滚动计算使用
         containerHeight.value = containerRef.value.clientHeight
       }
     }, 200)
@@ -461,7 +436,7 @@ onUnmounted(() => {
   renderTasks.forEach(t => t.cancel())
 })
 
-// 暴露给父组件的方法
+// 将内部方法抛出给 TaskDetail 组件调用
 defineExpose({ scrollToPercentage, highlightBlock })
 </script>
 
