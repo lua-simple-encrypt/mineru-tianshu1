@@ -12,11 +12,14 @@ MinerU Tianshu - SQLite Task Database Manager
 
 更新日志:
     - [新增] data 字段支持，用于存储 json_content 和 pdf_path 等扩展元数据
+    - [修复] clear_failed_tasks 增加物理文件删除逻辑
 """
 
 import sqlite3
 import json
 import uuid
+import shutil
+import os
 from contextlib import contextmanager
 from typing import Optional, List, Dict
 from pathlib import Path
@@ -497,60 +500,56 @@ class TaskDB:
             )
             return [dict(row) for row in cursor.fetchall()]
 
+    # -------------------------------------------------------------------------
+    # 核心修复：物理删除文件逻辑
+    # -------------------------------------------------------------------------
+    def _delete_task_files(self, task_row):
+        """辅助方法：安全删除任务的源文件和结果目录"""
+        task_id = task_row["task_id"]
+        
+        # 1. 删除上传的源文件
+        if task_row["file_path"]:
+            try:
+                fp = Path(task_row["file_path"])
+                if fp.exists() and fp.is_file():
+                    fp.unlink()
+                    logger.debug(f"Deleted source file for task {task_id}")
+            except Exception as e:
+                logger.warning(f"Failed to delete source file for task {task_id}: {e}")
+        
+        # 2. 删除结果目录
+        if task_row["result_path"]:
+            try:
+                rp = Path(task_row["result_path"])
+                if rp.exists() and rp.is_dir():
+                    shutil.rmtree(rp)
+                    logger.debug(f"Deleted result dir for task {task_id}")
+            except Exception as e:
+                logger.warning(f"Failed to delete result dir for task {task_id}: {e}")
+
     def cleanup_old_task_records(self, days: int = 30):
         """清理旧任务"""
-        from pathlib import Path
-        import shutil
-
         with self.get_cursor() as cursor:
             # 先查询要删除的任务及其文件路径
-            cursor.execute(
-                """
+            cursor.execute("""
                 SELECT task_id, file_path, result_path FROM tasks
                 WHERE completed_at < datetime('now', '-' || ? || ' days')
                 AND status IN ('completed', 'failed')
-            """,
-                (days,),
-            )
-
+            """, (days,))
             old_tasks = cursor.fetchall()
-
+            
             # 删除所有相关文件
             for task in old_tasks:
-                task_id = task["task_id"]
-
-                # 1. 删除上传的原始文件
-                if task["file_path"]:
-                    file_path = Path(task["file_path"])
-                    if file_path.exists() and file_path.is_file():
-                        try:
-                            file_path.unlink()
-                            logger.debug(f"Deleted upload file for task {task_id}: {file_path.name}")
-                        except Exception as e:
-                            logger.warning(f"Failed to delete upload file for task {task_id}: {e}")
-
-                # 2. 删除结果文件夹
-                if task["result_path"]:
-                    result_path = Path(task["result_path"])
-                    if result_path.exists() and result_path.is_dir():
-                        try:
-                            shutil.rmtree(result_path)
-                            logger.debug(f"Deleted result directory for task {task_id}: {result_path.name}")
-                        except Exception as e:
-                            logger.warning(f"Failed to delete result files for task {task_id}: {e}")
-
+                self._delete_task_files(task)
+            
             # 删除数据库记录
-            cursor.execute(
-                """
+            cursor.execute("""
                 DELETE FROM tasks
                 WHERE completed_at < datetime('now', '-' || ? || ' days')
                 AND status IN ('completed', 'failed')
-            """,
-                (days,),
-            )
-
-            deleted_count = cursor.rowcount
-            return deleted_count
+            """, (days,))
+            
+            return cursor.rowcount
 
     def reset_stale_tasks(self, timeout_minutes: int = 60):
         """重置超时的 processing 任务为 pending"""
@@ -568,6 +567,30 @@ class TaskDB:
             )
             reset_count = cursor.rowcount
             return reset_count
+
+    # -------------------------------------------------------------------------
+    # 新增功能：清理失败任务 (包含物理文件删除)
+    # -------------------------------------------------------------------------
+    def clear_failed_tasks(self) -> int:
+        """
+        一键清理所有失败的任务
+        执行步骤: 1.查询路径 -> 2.删除磁盘文件 -> 3.删除数据库记录
+        """
+        with self.get_cursor() as cursor:
+            # 1. 查询所有 failed 任务
+            cursor.execute("SELECT task_id, file_path, result_path FROM tasks WHERE status = 'failed'")
+            failed_tasks = cursor.fetchall()
+            
+            count = 0
+            # 2. 物理删除
+            for task in failed_tasks:
+                self._delete_task_files(task)
+                count += 1
+            
+            # 3. 数据库删除
+            cursor.execute("DELETE FROM tasks WHERE status = 'failed'")
+            logger.info(f"🧹 Cleared {cursor.rowcount} failed tasks (files deleted for {count} tasks)")
+            return cursor.rowcount
 
     # ============================================================================
     # 主子任务支持 (Parent-Child Task Support)
@@ -807,15 +830,6 @@ class TaskDB:
                 (task_id,)
             )
             return cursor.rowcount > 0
-
-    def clear_failed_tasks(self) -> int:
-        """
-        一键清理所有失败的任务
-        返回被删除的记录数
-        """
-        with self.get_cursor() as cursor:
-            cursor.execute("DELETE FROM tasks WHERE status = 'failed'")
-            return cursor.rowcount
 
     def pause_task(self, task_id: str) -> bool:
         """
