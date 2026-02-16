@@ -4,10 +4,10 @@ PaddleOCR-VL 解析引擎 (PaddleX v3 Local Wrapper)
 支持自动多语言识别、Markdown 格式输出
 
 优化日志 (2026-02-15):
-1. [新增] 智能显存休眠 (Auto-Sleep): 空闲 5 分钟自动释放显存
-2. [新增] 自动唤醒 (Auto-Wakeup): 新请求自动加载模型
-3. [优化] 移除单次任务后的强制清理，提升连续处理性能
-4. [基础] 强制单线程与禁用联网检查
+1. [功能] 双向精准定位支持：提取 bbox 并输出结构化 json_content
+2. [资源] 智能显存休眠 (Auto-Sleep): 空闲 5 分钟自动释放显存
+3. [资源] 自动唤醒 (Auto-Wakeup): 新请求自动加载模型
+4. [性能] 移除单次任务后的强制清理，提升连续处理性能
 """
 
 import os
@@ -18,7 +18,7 @@ import time
 import traceback
 import threading
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from threading import Lock
 from loguru import logger
 
@@ -47,7 +47,7 @@ class PaddleOCRVLEngine:
     特性：
     - 单例模式：确保进程内只有一个模型实例
     - 智能显存管理：空闲自动释放，使用时自动加载
-    - 格式支持：输出 Markdown 和 JSON
+    - 格式支持：输出 Markdown 和 JSON (含 BBox)
     - 稳定性：强制串行处理，防止 OOM
     """
 
@@ -196,14 +196,13 @@ class PaddleOCRVLEngine:
             try:
                 if PADDLE_AVAILABLE and paddle.device.is_compiled_with_cuda():
                     paddle.device.cuda.empty_cache()
-                    # 部分版本的 Paddle 可能需要额外调用 ipu/xpu 清理，此处仅处理 cuda
                 logger.info("✅ PaddleOCR-VL model unloaded and VRAM released.")
             except Exception as e:
                 logger.debug(f"Cleanup warning: {e}")
 
     def parse(self, file_path: str, output_path: str, **kwargs) -> Dict[str, Any]:
         """
-        执行解析 (增强版：自动唤醒 + 状态维护)
+        执行解析 (增强版：自动唤醒 + 双向定位数据提取)
         """
         # =========================================================
         # 1. 状态更新与自动唤醒
@@ -275,7 +274,8 @@ class PaddleOCRVLEngine:
             output_generator = pipeline.predict(**predict_params)
             
             markdown_pages = []
-            json_list = []
+            json_list = []      # 原始 PaddleX JSON
+            full_content_list = [] # [新增] 扁平化结构数据，用于双向定位
             page_count = 0
             
             for res in output_generator:
@@ -296,9 +296,26 @@ class PaddleOCRVLEngine:
                 except Exception as e:
                     logger.warning(f"⚠️ Page {page_count}: Failed to save assets: {e}")
 
-                # 2. 收集 JSON 数据
+                # 2. 收集原始 JSON 数据 (PaddleX 格式)
                 if hasattr(res, "json") and res.json:
                     json_list.append(res.json)
+                    
+                    # [新增] 提取 BBox 用于双向定位
+                    # PaddleX 返回格式: {'res': [{'bbox': [...], 'text': '...', 'type': '...'}, ...]}
+                    if isinstance(res.json, dict) and 'res' in res.json:
+                        blocks = res.json['res']
+                        for block in blocks:
+                            clean_block = {
+                                "id": len(full_content_list) + 1, # 全局唯一 ID
+                                "page_idx": page_count - 1,       # 0-based page index
+                                "type": block.get('type', 'text'),
+                                "text": block.get('text', ''),
+                                "bbox": block.get('layout_bbox') or block.get('bbox') or [], # 优先使用 layout_bbox
+                                "score": block.get('score', 0)
+                            }
+                            # 只有包含坐标的才加入列表
+                            if clean_block['bbox']:
+                                full_content_list.append(clean_block)
 
                 # 3. 提取 Markdown
                 page_md = ""
@@ -338,20 +355,24 @@ class PaddleOCRVLEngine:
             final_md_path = output_path / "result.md"
             final_md_path.write_text(full_markdown, encoding="utf-8")
             
-            final_json_path = output_path / "result.json"
-            combined_data = {
+            # [修改] result.json 优先使用 full_content_list (扁平化结构)，以便前端解析
+            # 如果 full_content_list 为空（某些模式可能不返回 bbox），则回退到原始分页结构
+            final_json_data = full_content_list if full_content_list else {
                 "total_pages": page_count,
                 "pages": json_list
             }
+            
+            final_json_path = output_path / "result.json"
             with open(final_json_path, "w", encoding="utf-8") as f:
-                json.dump(combined_data, f, ensure_ascii=False, indent=2)
+                json.dump(final_json_data, f, ensure_ascii=False, indent=2)
 
             return {
                 "success": True,
                 "result_path": str(output_path),
                 "markdown": full_markdown,
                 "markdown_file": str(final_md_path),
-                "json_file": str(final_json_path)
+                "json_file": str(final_json_path),
+                "json_content": final_json_data # 返回给 Worker 用于入库
             }
 
         except Exception as e:
