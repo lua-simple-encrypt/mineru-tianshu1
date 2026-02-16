@@ -20,17 +20,18 @@
 
         <button
           @click="confirmClearFailed"
-          class="btn bg-white text-red-600 border border-gray-200 hover:bg-red-50 hover:border-red-200 btn-sm flex items-center shadow-sm transition-all"
+          :disabled="actionLoading"
+          class="btn bg-white text-red-600 border border-gray-200 hover:bg-red-50 hover:border-red-200 btn-sm flex items-center shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           :title="$t('task.clearFailedTasks')"
         >
-          <Trash2 class="w-4 h-4 mr-1.5" />
+          <Trash2 :class="{ 'animate-spin': actionLoading && currentActionType === 'clearFailed' }" class="w-4 h-4 mr-1.5" />
           <span class="hidden sm:inline">{{ $t('task.clearFailedTasks') }}</span>
         </button>
 
         <button
           @click="refreshTasks(true)"
           :disabled="loading"
-          class="btn bg-white text-gray-700 border border-gray-200 hover:bg-gray-50 btn-sm flex items-center shadow-sm"
+          class="btn bg-white text-gray-700 border border-gray-200 hover:bg-gray-50 btn-sm flex items-center shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <RefreshCw :class="{ 'animate-spin': loading }" class="w-4 h-4 mr-1.5" />
           {{ $t('common.refresh') }}
@@ -119,9 +120,10 @@
         <div class="flex gap-2">
           <button
             @click="batchCancel"
-            class="bg-white border border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 px-3 py-1.5 rounded-md text-xs font-medium transition-colors flex items-center shadow-sm"
+            :disabled="actionLoading"
+            class="bg-white border border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 px-3 py-1.5 rounded-md text-xs font-medium transition-colors flex items-center shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <XCircle class="w-3.5 h-3.5 mr-1.5" />
+            <XCircle :class="{ 'animate-spin': actionLoading && currentActionType === 'batchCancel' }" class="w-3.5 h-3.5 mr-1.5" />
             {{ $t('task.batchCancel') }}
           </button>
           <button
@@ -192,12 +194,12 @@
                       {{ task.file_name }}
                     </div>
                     <div class="flex items-center mt-1 space-x-2">
-                       <span class="text-xs text-gray-400 font-mono bg-gray-50 px-1.5 py-0.5 rounded border border-gray-100">
-                        {{ task.task_id.slice(0, 8) }}
-                       </span>
-                       <button @click="copyToClipboard(task.task_id)" class="opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 hover:text-primary-600" :title="$t('common.copy')">
-                         <Copy class="w-3 h-3" />
-                       </button>
+                        <span class="text-xs text-gray-400 font-mono bg-gray-50 px-1.5 py-0.5 rounded border border-gray-100">
+                         {{ task.task_id.slice(0, 8) }}
+                        </span>
+                        <button @click="copyToClipboard(task.task_id)" class="opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 hover:text-primary-600" :title="$t('common.copy')">
+                          <Copy class="w-3 h-3" />
+                        </button>
                     </div>
                   </div>
                 </div>
@@ -240,46 +242,56 @@
                   <button
                     v-if="task.status === 'pending'"
                     @click="handleAction('pause', task)"
-                    class="btn-icon text-amber-500 hover:text-amber-600 hover:bg-amber-50"
+                    :disabled="isActionLoading(task.task_id)"
+                    class="btn-icon text-amber-500 hover:text-amber-600 hover:bg-amber-50 disabled:opacity-50 disabled:cursor-not-allowed"
                     :title="$t('task.pauseTask')"
                   >
-                    <Pause class="w-4 h-4" />
+                    <RefreshCw v-if="isActionLoading(task.task_id, 'pause')" class="w-4 h-4 animate-spin" />
+                    <Pause v-else class="w-4 h-4" />
                   </button>
 
                   <button
                     v-if="task.status === 'paused'"
                     @click="handleAction('resume', task)"
-                    class="btn-icon text-green-500 hover:text-green-600 hover:bg-green-50"
+                    :disabled="isActionLoading(task.task_id)"
+                    class="btn-icon text-green-500 hover:text-green-600 hover:bg-green-50 disabled:opacity-50 disabled:cursor-not-allowed"
                     :title="$t('task.resumeTask')"
                   >
-                    <Play class="w-4 h-4" />
+                    <RefreshCw v-if="isActionLoading(task.task_id, 'resume')" class="w-4 h-4 animate-spin" />
+                    <Play v-else class="w-4 h-4" />
                   </button>
 
                   <button
                     v-if="task.status === 'failed'"
                     @click="handleAction('retry', task)"
-                    class="btn-icon text-blue-500 hover:text-blue-600 hover:bg-blue-50"
+                    :disabled="isActionLoading(task.task_id)"
+                    class="btn-icon text-blue-500 hover:text-blue-600 hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed"
                     :title="$t('task.retryTask')"
                   >
-                    <RotateCw class="w-4 h-4" />
+                    <RefreshCw v-if="isActionLoading(task.task_id, 'retry')" class="w-4 h-4 animate-spin" />
+                    <RotateCw v-else class="w-4 h-4" />
                   </button>
 
                   <button
                     v-if="['completed', 'failed'].includes(task.status) && task.result_path !== 'CLEARED'"
                     @click="handleAction('clearCache', task)"
-                    class="btn-icon text-orange-400 hover:text-orange-500 hover:bg-orange-50"
+                    :disabled="isActionLoading(task.task_id)"
+                    class="btn-icon text-orange-400 hover:text-orange-500 hover:bg-orange-50 disabled:opacity-50 disabled:cursor-not-allowed"
                     :title="$t('task.clearCache')"
                   >
-                    <Eraser class="w-4 h-4" />
+                    <RefreshCw v-if="isActionLoading(task.task_id, 'clearCache')" class="w-4 h-4 animate-spin" />
+                    <Eraser v-else class="w-4 h-4" />
                   </button>
                   
                   <button
                     v-if="['pending', 'processing'].includes(task.status)"
                     @click="handleAction('cancel', task)"
-                    class="btn-icon text-gray-400 hover:text-red-600 hover:bg-red-50"
+                    :disabled="isActionLoading(task.task_id)"
+                    class="btn-icon text-gray-400 hover:text-red-600 hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed"
                     :title="$t('task.cancelTask')"
                   >
-                    <XCircle class="w-4 h-4" />
+                    <RefreshCw v-if="isActionLoading(task.task_id, 'cancel')" class="w-4 h-4 animate-spin" />
+                    <XCircle v-else class="w-4 h-4" />
                   </button>
                 </div>
               </td>
@@ -352,6 +364,11 @@ const total = computed(() => taskStore.total)
 const loading = ref(false)
 const autoRefresh = ref(false)
 let refreshInterval: number | null = null
+
+// 操作 Loading 状态管理
+const actionLoading = ref(false)
+const currentActionTaskId = ref<string | null>(null)
+const currentActionType = ref<string | null>(null)
 
 const filters = ref({
   status: '' as TaskStatus | '',
@@ -432,52 +449,98 @@ const confirmDialogMessage = ref('')
 const confirmDialogType = ref<'info' | 'warning' | 'danger'>('info')
 let pendingAction: (() => Promise<void>) | null = null
 
+// 检查当前任务是否正在执行特定操作
+function isActionLoading(taskId: string, actionType?: string) {
+  if (!actionLoading.value) return false
+  if (taskId !== currentActionTaskId.value) return false
+  if (actionType && actionType !== currentActionType.value) return false
+  return true
+}
+
 /**
  * 统一处理单个任务的操作
  */
 function handleAction(action: 'retry' | 'pause' | 'resume' | 'cancel' | 'clearCache', task: Task) {
+  // 设置待执行的 Action
+  const execute = async () => {
+    actionLoading.value = true
+    currentActionTaskId.value = task.task_id
+    currentActionType.value = action
+    
+    try {
+      switch (action) {
+        case 'retry': await taskStore.retryTask(task.task_id); break;
+        case 'pause': await taskStore.pauseTask(task.task_id); break;
+        case 'resume': await taskStore.resumeTask(task.task_id); break;
+        case 'clearCache': await taskStore.clearTaskCache(task.task_id); break;
+        case 'cancel': await taskStore.cancelTask(task.task_id); break;
+      }
+      await refreshTasks() // 操作后刷新列表
+    } catch (error) {
+      console.error(`Action ${action} failed:`, error)
+      alert(`Action failed: ${error}`) // 简单提示，建议替换为 Toast
+    } finally {
+      actionLoading.value = false
+      currentActionTaskId.value = null
+      currentActionType.value = null
+    }
+  }
+
+  // 根据操作类型决定是否显示确认框
   switch (action) {
     case 'retry':
-      pendingAction = async () => { await taskStore.retryTask(task.task_id); await refreshTasks() }
+      pendingAction = execute
       confirmDialogTitle.value = t('task.retryTask')
       confirmDialogMessage.value = t('task.confirmRetry')
       confirmDialogType.value = 'info'
+      showConfirmDialog.value = true
       break
     case 'pause':
-      pendingAction = async () => { await taskStore.pauseTask(task.task_id); await refreshTasks() }
+      // 暂停通常不需要确认，直接执行，或者也可以加上确认
+      pendingAction = execute
       confirmDialogTitle.value = t('task.pauseTask')
       confirmDialogMessage.value = t('task.confirmPause')
       confirmDialogType.value = 'warning'
+      showConfirmDialog.value = true
       break
     case 'resume':
-      pendingAction = async () => { await taskStore.resumeTask(task.task_id); await refreshTasks() }
-      confirmDialogTitle.value = t('task.resumeTask')
-      confirmDialogMessage.value = t('task.confirmResume')
-      confirmDialogType.value = 'info'
+      // 继续通常不需要确认，直接执行
+      execute()
       break
     case 'clearCache':
-      pendingAction = async () => { await taskStore.clearTaskCache(task.task_id); await refreshTasks() }
+      pendingAction = execute
       confirmDialogTitle.value = t('task.clearCache')
       confirmDialogMessage.value = t('task.confirmClearCache')
       confirmDialogType.value = 'danger'
+      showConfirmDialog.value = true
       break
     case 'cancel':
-      pendingAction = async () => { await taskStore.cancelTask(task.task_id); await refreshTasks() }
+      pendingAction = execute
       confirmDialogTitle.value = t('task.cancelTask')
       confirmDialogMessage.value = t('task.confirmCancel')
       confirmDialogType.value = 'danger'
+      showConfirmDialog.value = true
       break
   }
-  showConfirmDialog.value = true
 }
 
 /**
  * 一键清理失败任务
  */
 function confirmClearFailed() {
-  pendingAction = async () => { await taskStore.clearFailedTasks(); await refreshTasks(true) }
+  pendingAction = async () => { 
+    actionLoading.value = true
+    currentActionType.value = 'clearFailed'
+    try {
+      await taskStore.clearFailedTasks()
+      await refreshTasks(true) 
+    } finally {
+      actionLoading.value = false
+      currentActionType.value = null
+    }
+  }
   confirmDialogTitle.value = t('task.clearFailedTasks')
-  confirmDialogMessage.value = t('task.confirmClearFailed') // "Are you sure you want to delete ALL failed tasks?"
+  confirmDialogMessage.value = t('task.confirmClearFailed')
   confirmDialogType.value = 'danger'
   showConfirmDialog.value = true
 }
@@ -497,12 +560,19 @@ function batchCancel() {
   }
 
   pendingAction = async () => {
-    for (const id of pendingIds) {
-      await taskStore.cancelTask(id)
+    actionLoading.value = true
+    currentActionType.value = 'batchCancel'
+    try {
+      for (const id of pendingIds) {
+        await taskStore.cancelTask(id)
+      }
+      selectedTasks.value = []
+      selectAll.value = false
+      await refreshTasks(true)
+    } finally {
+      actionLoading.value = false
+      currentActionType.value = null
     }
-    selectedTasks.value = []
-    selectAll.value = false
-    await refreshTasks(true)
   }
   
   confirmDialogTitle.value = t('task.batchCancel')
