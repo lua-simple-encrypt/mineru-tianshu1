@@ -1,17 +1,3 @@
-<div class="flex-1 relative min-h-0 bg-white">
-  <div class="absolute inset-0 overflow-y-auto..."> 
-    <div v-show="activeTab === 'markdown'" class="w-full">
-       <MarkdownViewer /> </div>
-    ```
-当你在 Edge 浏览器中缩小网页（比如缩放到 80%、50%）时，`absolute inset-0`（也就是 `top:0; bottom:0`）在某些浏览器引擎下计算滚动高度时会因为子组件 `<MarkdownViewer>` 内部没有撑开高度而发生截断。只有原生的 `v-for` 循环（如你的 `sync` 视图）才不会受此影响。
-
-**终极解法：摒弃复杂的绝对定位（Absolute）和包裹嵌套，回归最纯粹的 Flex 纵向流式布局。**
-
-我们要把外面的那层 `absolute` 删掉，让三个 Tab 容器各自成为独立的、纯粹的 Flex 弹性伸缩层（`flex-1 overflow-y-auto`）。这就如同左侧的 PDF 容器一样，内容有多长，内层就能滚多长，绝对不会在底部出现半截空白！
-
-请**完全覆盖**你的 `frontend/src/views/TaskDetail.vue` 文件：
-
-```vue
 <template>
   <div class="h-[calc(100vh-4rem)] flex flex-col">
     <div class="flex items-center justify-between mb-4 px-1 flex-shrink-0">
@@ -20,24 +6,26 @@
           <ArrowLeft class="w-4 h-4 mr-1" /> 返回
         </button>
         <div class="h-4 w-px bg-gray-300"></div>
-        <h1 class="text-xl font-bold text-gray-900 truncate max-w-md" :title="task?.file_name">{{ task?.file_name || '任务详情' }}</h1>
+        <h1 class="text-xl font-bold text-gray-900 truncate max-w-md" :title="task?.file_name">
+          {{ task?.file_name || '任务详情' }}
+        </h1>
         <StatusBadge v-if="task" :status="task.status" />
       </div>
 
       <div class="flex items-center gap-3">
         <template v-if="task">
-            <button v-if="task.status === 'failed'" @click="initiateAction('retry')" :disabled="actionLoading" class="btn btn-white text-blue-600 border-gray-200 hover:bg-blue-50 btn-sm flex items-center shadow-sm transition-all disabled:opacity-50">
-              <RotateCw :class="{'animate-spin': actionLoading && currentAction === 'retry'}" class="w-4 h-4 mr-1.5" />
-              <span>重试任务</span>
-            </button>
-            <button v-if="['completed', 'failed'].includes(task.status) && task.result_path !== 'CLEARED'" @click="initiateAction('clearCache')" :disabled="actionLoading" class="btn btn-white text-orange-600 border-gray-200 hover:bg-orange-50 btn-sm flex items-center shadow-sm transition-all disabled:opacity-50">
-              <Eraser :class="{'animate-pulse': actionLoading && currentAction === 'clearCache'}" class="w-4 h-4 mr-1.5" />
-              <span>清理缓存</span>
-            </button>
-            <button @click="initiateAction('delete')" :disabled="actionLoading" class="btn btn-white text-red-600 border-gray-200 hover:bg-red-50 btn-sm flex items-center shadow-sm transition-all disabled:opacity-50" title="彻底删除任务及文件">
-              <Trash2 class="w-4 h-4 mr-1.5" />
-              <span class="hidden sm:inline">彻底删除</span>
-            </button>
+          <button v-if="task.status === 'failed'" @click="initiateAction('retry')" :disabled="actionLoading" class="btn btn-white text-blue-600 border-gray-200 hover:bg-blue-50 btn-sm flex items-center shadow-sm transition-all disabled:opacity-50">
+            <RotateCw :class="{'animate-spin': actionLoading && currentAction === 'retry'}" class="w-4 h-4 mr-1.5" />
+            <span>重试任务</span>
+          </button>
+          <button v-if="['completed', 'failed'].includes(task.status) && task.result_path !== 'CLEARED'" @click="initiateAction('clearCache')" :disabled="actionLoading" class="btn btn-white text-orange-600 border-gray-200 hover:bg-orange-50 btn-sm flex items-center shadow-sm transition-all disabled:opacity-50">
+            <Eraser :class="{'animate-pulse': actionLoading && currentAction === 'clearCache'}" class="w-4 h-4 mr-1.5" />
+            <span>清理缓存</span>
+          </button>
+          <button @click="initiateAction('delete')" :disabled="actionLoading" class="btn btn-white text-red-600 border-gray-200 hover:bg-red-50 btn-sm flex items-center shadow-sm transition-all disabled:opacity-50" title="彻底删除任务及文件">
+            <Trash2 class="w-4 h-4 mr-1.5" />
+            <span class="hidden sm:inline">彻底删除</span>
+          </button>
         </template>
 
         <div v-if="task?.status === 'completed' && pdfUrl && task?.result_path !== 'CLEARED'" class="flex items-center bg-gray-100 rounded-lg p-1">
@@ -49,29 +37,44 @@
           </button>
         </div>
 
-        <button @click="refreshTask()" :disabled="loading" class="btn btn-secondary btn-sm shadow-sm"><RefreshCw :class="{ 'animate-spin': loading }" class="w-4 h-4" /></button>
+        <button @click="refreshTask()" :disabled="loading" class="btn btn-secondary btn-sm shadow-sm">
+          <RefreshCw :class="{ 'animate-spin': loading }" class="w-4 h-4" />
+        </button>
       </div>
     </div>
 
-    <div v-if="loading && !task" class="flex-1 flex items-center justify-center"><LoadingSpinner size="lg" text="加载中..." /></div>
-    <div v-else-if="error" class="card bg-red-50 border-red-200 mx-1 p-4 mb-4"><div class="flex items-center text-red-800"><AlertCircle class="w-6 h-6 mr-3" /> {{ error }}</div></div>
+    <div v-if="loading && !task" class="flex-1 flex items-center justify-center">
+      <LoadingSpinner size="lg" text="加载中..." />
+    </div>
+    <div v-else-if="error" class="card bg-red-50 border-red-200 mx-1 p-4 mb-4">
+      <div class="flex items-center text-red-800">
+        <AlertCircle class="w-6 h-6 mr-3" /> {{ error }}
+      </div>
+    </div>
 
     <div v-else-if="task" class="flex-1 min-h-0 relative">
       <div v-if="['pending', 'processing', 'paused'].includes(task.status)" class="max-w-3xl mx-auto mt-16 space-y-6 px-4">
-         <div class="card p-10 text-center shadow-sm">
-            <h2 class="text-xl font-semibold text-gray-900 mb-2">处理中...</h2>
-            <div class="mt-8 flex justify-center"><LoadingSpinner size="lg" /></div>
-         </div>
+        <div class="card p-10 text-center shadow-sm">
+          <h2 class="text-xl font-semibold text-gray-900 mb-2">处理中...</h2>
+          <div class="mt-8 flex justify-center"><LoadingSpinner size="lg" /></div>
+        </div>
       </div>
       <div v-else-if="['failed', 'cancelled'].includes(task.status)" class="max-w-3xl mx-auto mt-10 space-y-6 px-4">
-         <div class="card p-8 text-center border-red-100 bg-red-50/50">
-            <div class="flex justify-center mb-4"><div class="p-3 bg-red-100 rounded-full text-red-500"><AlertCircle class="w-8 h-8" /></div></div>
-            <h2 class="text-xl font-semibold text-red-700 mb-2">任务失败</h2>
-            <div class="text-red-600 bg-white p-4 rounded-lg border border-red-200 font-mono text-sm text-left overflow-auto max-h-64 break-all shadow-sm">{{ task.error_message || '未知错误' }}</div>
-         </div>
+        <div class="card p-8 text-center border-red-100 bg-red-50/50">
+          <div class="flex justify-center mb-4">
+            <div class="p-3 bg-red-100 rounded-full text-red-500"><AlertCircle class="w-8 h-8" /></div>
+          </div>
+          <h2 class="text-xl font-semibold text-red-700 mb-2">任务失败</h2>
+          <div class="text-red-600 bg-white p-4 rounded-lg border border-red-200 font-mono text-sm text-left overflow-auto max-h-64 break-all shadow-sm">
+            {{ task.error_message || '未知错误' }}
+          </div>
+        </div>
       </div>
       <div v-else-if="task.result_path === 'CLEARED'" class="max-w-3xl mx-auto mt-16 px-4">
-        <div class="card p-12 text-center border-gray-200 bg-gray-50/30 shadow-sm"><div class="flex justify-center mb-6"><Eraser class="w-12 h-12 text-gray-400" /></div><h2 class="text-xl font-semibold text-gray-900 mb-2">{{ $t('task.filesCleared') }}</h2></div>
+        <div class="card p-12 text-center border-gray-200 bg-gray-50/30 shadow-sm">
+          <div class="flex justify-center mb-6"><Eraser class="w-12 h-12 text-gray-400" /></div>
+          <h2 class="text-xl font-semibold text-gray-900 mb-2">{{ $t('task.filesCleared') }}</h2>
+        </div>
       </div>
 
       <div v-else class="h-full w-full flex flex-row gap-4">
@@ -106,43 +109,46 @@
             </button>
           </div>
           
-          <div v-if="activeTab === 'markdown'" class="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-6 bg-white pb-20">
-             <MarkdownViewer :content="task.data?.content || ''" />
-          </div>
-
-          <div v-else-if="activeTab === 'sync'" ref="markdownContainerRef" class="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-6 bg-white scroll-smooth pb-20">
-            <div class="w-full max-w-[800px] mx-auto">
-              <div v-if="layoutData.length > 0" class="flex flex-col gap-3">
-                <div class="text-xs text-gray-500 bg-blue-50 p-2.5 rounded-lg mb-3 border border-blue-100">
-                  💡 此视图用于与左侧 PDF 进行行级别的双向点击定位。如果需要阅读带有精美排版和公式的全局文档，请切换至上方【完整文档】标签。
-                </div>
-                
-                <div 
-                  v-for="block in layoutData" 
-                  :key="block.id"
-                  :id="`md-block-${block.id}`"
-                  @click="handleMarkdownBlockClick(block)"
-                  :class="['p-3 rounded-lg transition-all cursor-pointer border break-words w-full text-[14px] leading-relaxed', 
-                           activeBlockId === block.id 
-                             ? 'bg-yellow-50 border-yellow-400 shadow-sm ring-2 ring-yellow-200' 
-                             : 'bg-white border-gray-100 hover:bg-gray-50 hover:border-gray-300']"
-                  title="点击在左侧 PDF 中定位"
-                >
-                  <div v-if="block.type === 'image'" class="text-blue-500 text-xs font-semibold mb-1 flex items-center gap-1 select-none"><Image class="w-3.5 h-3.5"/> [提取图片]</div>
-                  <div v-else-if="block.type === 'table'" class="text-green-500 text-xs font-semibold mb-1 flex items-center gap-1 select-none"><Table class="w-3.5 h-3.5"/> [提取表格]</div>
-                  <div v-else-if="block.type === 'doc_title'" class="text-lg font-bold text-gray-900 mb-1 border-b pb-1">{{ block.text }}</div>
-                  
-                  <div v-if="block.type !== 'doc_title'" class="whitespace-pre-wrap font-mono text-gray-600">{{ block.text }}</div>
-                </div>
-              </div>
-              <div v-else class="text-gray-500 text-sm italic text-center mt-10">未能提取到结构化版面数据。</div>
+          <div class="flex-1 min-h-0 flex flex-col bg-white relative">
+            
+            <div v-show="activeTab === 'markdown'" class="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-6 pb-20 w-full">
+               <MarkdownViewer :content="task.data?.content || ''" />
             </div>
-          </div>
 
-          <div v-else-if="activeTab === 'json'" class="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-6 bg-white pb-20">
-             <JsonViewer :data="task.data?.json_content || {}" />
-          </div>
+            <div v-show="activeTab === 'sync'" ref="markdownContainerRef" class="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-6 pb-20 w-full scroll-smooth">
+              <div class="max-w-[800px] mx-auto w-full">
+                <div v-if="layoutData.length > 0" class="flex flex-col gap-3">
+                  <div class="text-xs text-gray-500 bg-blue-50 p-2.5 rounded-lg mb-3 border border-blue-100">
+                    💡 此视图用于与左侧 PDF 进行行级别的双向点击定位。如果需要阅读带有精美排版和公式的全局文档，请切换至上方【完整文档】标签。
+                  </div>
+                  
+                  <div 
+                    v-for="block in layoutData" 
+                    :key="block.id"
+                    :id="`md-block-${block.id}`"
+                    @click="handleMarkdownBlockClick(block)"
+                    :class="['p-3 rounded-lg transition-all cursor-pointer border break-words w-full text-[14px] leading-relaxed', 
+                             activeBlockId === block.id 
+                               ? 'bg-yellow-50 border-yellow-400 shadow-sm ring-2 ring-yellow-200' 
+                               : 'bg-white border-gray-100 hover:bg-gray-50 hover:border-gray-300']"
+                    title="点击在左侧 PDF 中定位"
+                  >
+                    <div v-if="block.type === 'image'" class="text-blue-500 text-xs font-semibold mb-1 flex items-center gap-1 select-none"><Image class="w-3.5 h-3.5"/> [提取图片]</div>
+                    <div v-else-if="block.type === 'table'" class="text-green-500 text-xs font-semibold mb-1 flex items-center gap-1 select-none"><Table class="w-3.5 h-3.5"/> [提取表格]</div>
+                    <div v-else-if="block.type === 'doc_title'" class="text-lg font-bold text-gray-900 mb-1 border-b pb-1">{{ block.text }}</div>
+                    
+                    <div v-if="block.type !== 'doc_title'" class="whitespace-pre-wrap font-mono text-gray-600">{{ block.text }}</div>
+                  </div>
+                </div>
+                <div v-else class="text-gray-500 text-sm italic text-center mt-10">未能提取到结构化版面数据。</div>
+              </div>
+            </div>
 
+            <div v-show="activeTab === 'json'" class="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-6 pb-20 w-full">
+               <JsonViewer :data="task.data?.json_content || {}" />
+            </div>
+
+          </div>
         </div>
 
       </div>
@@ -187,9 +193,6 @@ const pdfUrl = computed(() => task.value?.data?.pdf_path ? `/api/v1/files/output
 const showPdf = computed(() => layoutMode.value === 'split' || (layoutMode.value === 'single' && pdfUrl.value))
 const showMarkdown = computed(() => layoutMode.value === 'split' || layoutMode.value !== 'single')
 
-// =======================================================
-// 🚀 数据格式化兼容：提取 _page_width
-// =======================================================
 const layoutData = computed(() => {
   const jsonContent = task.value?.data?.json_content
   if (!jsonContent) return []
@@ -221,10 +224,6 @@ const layoutData = computed(() => {
   }))
 })
 
-// =======================================================
-// 🎯 精准双向定位点击
-// =======================================================
-
 const handlePdfBlockClick = (block: any) => {
   if (!block) return
   activeBlockId.value = block.id 
@@ -236,7 +235,6 @@ const handlePdfBlockClick = (block: any) => {
   nextTick(() => {
     const el = document.getElementById(`md-block-${block.id}`)
     if (el && markdownContainerRef.value) {
-      // 算出该元素相对于滚动容器的顶部高度偏移量
       const topPos = el.offsetTop - 24;
       markdownContainerRef.value.scrollTo({
         top: Math.max(0, topPos),
