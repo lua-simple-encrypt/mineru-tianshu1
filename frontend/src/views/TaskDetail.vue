@@ -269,7 +269,7 @@ const actionLoading = ref(false)
 const error = ref('')
 
 const activeTab = ref<'markdown' | 'json'>('markdown')
-const layoutMode = ref<'single' | 'split'>('split')
+const layoutMode = ref<'split' | 'single'>('split')
 const syncScroll = ref(true) // 默认开启同步滚动
 const activeBlockId = ref<number | null>(null) 
 
@@ -282,13 +282,15 @@ const pdfUrl = computed(() => task.value?.data?.pdf_path ? `/api/v1/files/output
 const showPdf = computed(() => layoutMode.value === 'split' || (layoutMode.value === 'single' && pdfUrl.value))
 const showMarkdown = computed(() => layoutMode.value === 'split' || layoutMode.value !== 'single')
 
-// Data Mapping: 将嵌套的 JSON 展平为 Block 列表，便于渲染和索引
+// Data Mapping: 将嵌套的 JSON 展平为 Block 列表，便于前端渲染 ID 和互相绑定
 const layoutData = computed(() => {
   const jsonContent = task.value?.data?.json_content
   if (!jsonContent) return []
   
+  // 新版引擎结构：已经是扁平数组
   if (Array.isArray(jsonContent)) return jsonContent 
   
+  // 旧版引擎结构或兼容模式： { pages: [ { blocks: [...] }, ... ] }
   if (jsonContent.pages && Array.isArray(jsonContent.pages)) {
       return jsonContent.pages.flatMap((p: any) => {
           return (p.blocks || []).map((b: any) => ({
@@ -307,23 +309,16 @@ const triggerPdfResize = () => {
   nextTick(() => {
     setTimeout(() => {
       window.dispatchEvent(new Event('resize'))
-    }, 300) // 延迟确保 DOM 已经完全展开
+    }, 300)
   })
 }
 
-// 监听布局变化或任务加载完毕，触发重绘
 watch([layoutMode, showPdf], () => {
   if (showPdf.value) triggerPdfResize()
 })
 
-watch(() => task.value?.status, (newStatus, oldStatus) => {
-  if (newStatus === 'completed' && oldStatus !== 'completed') {
-    triggerPdfResize()
-  }
-})
-
 // =======================================================
-// 同步滚动逻辑 (Bi-directional Sync)
+// 🚀 [核心] 同步滚动逻辑 (Sync Scrolling)
 // =======================================================
 let isSyncingLeft = false
 let isSyncingRight = false
@@ -334,10 +329,10 @@ const clearSyncLock = () => {
     syncTimeout = setTimeout(() => {
         isSyncingLeft = false
         isSyncingRight = false
-    }, 150) // 增加延迟防止动画冲突
+    }, 150) // 延迟，防止相互循环触发 scroll
 }
 
-// 1. PDF 滚动 -> 带动 Markdown
+// 1. PDF 滚动 -> 计算百分比 -> 赋值给 Markdown 容器
 const handlePdfScroll = ({ scrollTop, scrollHeight, clientHeight }: any) => {
   if (!syncScroll.value || isSyncingRight || !markdownContainerRef.value) return
   
@@ -353,7 +348,7 @@ const handlePdfScroll = ({ scrollTop, scrollHeight, clientHeight }: any) => {
   clearSyncLock()
 }
 
-// 2. Markdown 滚动 -> 带动 PDF
+// 2. Markdown 滚动 -> 计算百分比 -> 调用 VirtualPdfViewer 暴漏的方法
 const handleMarkdownScroll = (e: Event) => {
   if (!syncScroll.value || isSyncingLeft || !pdfViewerRef.value) return
   
@@ -364,7 +359,7 @@ const handleMarkdownScroll = (e: Event) => {
   isSyncingRight = true
   const ratio = target.scrollTop / maxScroll
   
-  if (typeof pdfViewerRef.value.scrollToPercentage === 'function') {
+  if (typeof pdfViewerRef.value?.scrollToPercentage === 'function') {
     pdfViewerRef.value.scrollToPercentage(ratio)
   }
   
@@ -372,10 +367,10 @@ const handleMarkdownScroll = (e: Event) => {
 }
 
 // =======================================================
-// 双向精准定位 (Bi-directional Positioning)
+// 🚀 [核心] 双向精准定位 (Bi-directional Positioning)
 // =======================================================
 
-// 1. 点击 PDF 某块 -> 右侧 Markdown 跳转并高亮
+// 1. 点击左侧 PDF 上的框 -> 右侧 Markdown 滚动到对应元素
 const handleBlockClick = (block: any) => {
   if (!block || !markdownContainerRef.value) return
   
@@ -385,8 +380,9 @@ const handleBlockClick = (block: any) => {
   const el = document.getElementById(elementId)
   
   if (el) {
+    // 关键：临时切断同步锁，防止平滑滚动期间触发 scroll 乱跳
     const oldSync = syncScroll.value
-    syncScroll.value = false // 临时切断同步，防止死锁
+    syncScroll.value = false 
     
     el.scrollIntoView({ behavior: 'smooth', block: 'center' })
     
@@ -394,7 +390,7 @@ const handleBlockClick = (block: any) => {
   }
 }
 
-// 2. 点击 Markdown 某块 -> 左侧 PDF 跳转并画框
+// 2. 点击右侧 Markdown 段落 -> 左侧 PDF 跳转到该页并在对应 BBox 画红框
 const handleMarkdownClick = (block: any) => {
   if (!block || !pdfViewerRef.value) return
   
@@ -403,9 +399,10 @@ const handleMarkdownClick = (block: any) => {
   const oldSync = syncScroll.value
   syncScroll.value = false
 
+  // 转换页码：PDF.js 使用从 1 开始的索引，通常数据里是 0
   const pageIndex = (typeof block.page_idx === 'number' ? block.page_idx : block.page_id) + 1
   
-  if (typeof pdfViewerRef.value.highlightBlock === 'function') {
+  if (typeof pdfViewerRef.value?.highlightBlock === 'function') {
     pdfViewerRef.value.highlightBlock(pageIndex, block.bbox)
   }
   
@@ -413,7 +410,7 @@ const handleMarkdownClick = (block: any) => {
 }
 
 // =======================================================
-// Actions & Data Loading
+// Actions & Lifecycle
 // =======================================================
 
 const setMode = (mode: 'single' | 'split') => layoutMode.value = mode
@@ -425,7 +422,7 @@ async function refreshTask() {
   error.value = ''
   try {
     await taskStore.fetchTaskStatus(taskId.value, false, 'both')
-    triggerPdfResize() // 数据刷新后保证PDF容器计算正确
+    triggerPdfResize() 
   } catch (err: any) {
     error.value = err.message || t('task.loadFailed')
   } finally {
@@ -454,7 +451,6 @@ const downloadMarkdown = () => {
   URL.revokeObjectURL(url)
 }
 
-// --- Action Dialogs ---
 const showConfirm = ref(false)
 const confirmTitle = ref('')
 const confirmMessage = ref('')
@@ -495,13 +491,12 @@ async function executeAction() {
   }
 }
 
-// --- Lifecycle ---
 onMounted(async () => {
   await refreshTask()
   if (task.value && ['pending', 'processing'].includes(task.value.status)) {
     startPolling()
   } else {
-    triggerPdfResize() // 页面挂载完成即刻补偿一次重绘
+    triggerPdfResize() 
   }
 })
 
