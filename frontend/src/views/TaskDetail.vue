@@ -1,3 +1,17 @@
+<div class="flex-1 relative min-h-0 bg-white">
+  <div class="absolute inset-0 overflow-y-auto..."> 
+    <div v-show="activeTab === 'markdown'" class="w-full">
+       <MarkdownViewer /> </div>
+    ```
+当你在 Edge 浏览器中缩小网页（比如缩放到 80%、50%）时，`absolute inset-0`（也就是 `top:0; bottom:0`）在某些浏览器引擎下计算滚动高度时会因为子组件 `<MarkdownViewer>` 内部没有撑开高度而发生截断。只有原生的 `v-for` 循环（如你的 `sync` 视图）才不会受此影响。
+
+**终极解法：摒弃复杂的绝对定位（Absolute）和包裹嵌套，回归最纯粹的 Flex 纵向流式布局。**
+
+我们要把外面的那层 `absolute` 删掉，让三个 Tab 容器各自成为独立的、纯粹的 Flex 弹性伸缩层（`flex-1 overflow-y-auto`）。这就如同左侧的 PDF 容器一样，内容有多长，内层就能滚多长，绝对不会在底部出现半截空白！
+
+请**完全覆盖**你的 `frontend/src/views/TaskDetail.vue` 文件：
+
+```vue
 <template>
   <div class="h-[calc(100vh-4rem)] flex flex-col">
     <div class="flex items-center justify-between mb-4 px-1 flex-shrink-0">
@@ -92,47 +106,43 @@
             </button>
           </div>
           
-          <div class="flex-1 relative min-h-0 bg-white">
-            <div 
-              ref="markdownContainerRef" 
-              class="absolute inset-0 overflow-y-auto overflow-x-hidden custom-scrollbar scroll-smooth p-6 pb-20"
-            >
-              <div v-show="activeTab === 'markdown'" class="w-full">
-                 <MarkdownViewer :content="task.data?.content || ''" />
-              </div>
+          <div v-if="activeTab === 'markdown'" class="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-6 bg-white pb-20">
+             <MarkdownViewer :content="task.data?.content || ''" />
+          </div>
 
-              <div v-show="activeTab === 'sync'" class="w-full max-w-[800px] mx-auto">
-                <div v-if="layoutData.length > 0" class="flex flex-col gap-3">
-                  <div class="text-xs text-gray-500 bg-blue-50 p-2.5 rounded-lg mb-3 border border-blue-100">
-                    💡 此视图用于与左侧 PDF 进行行级别的双向点击定位。如果需要阅读带有精美排版和公式的全局文档，请切换至上方【完整文档】标签。
-                  </div>
-                  
-                  <div 
-                    v-for="block in layoutData" 
-                    :key="block.id"
-                    :id="`md-block-${block.id}`"
-                    @click="handleMarkdownBlockClick(block)"
-                    :class="['p-3 rounded-lg transition-all cursor-pointer border break-words w-full text-[14px] leading-relaxed', 
-                             activeBlockId === block.id 
-                               ? 'bg-yellow-50 border-yellow-400 shadow-sm ring-2 ring-yellow-200' 
-                               : 'bg-white border-gray-100 hover:bg-gray-50 hover:border-gray-300']"
-                    title="点击在左侧 PDF 中定位"
-                  >
-                    <div v-if="block.type === 'image'" class="text-blue-500 text-xs font-semibold mb-1 flex items-center gap-1 select-none"><Image class="w-3.5 h-3.5"/> [提取图片]</div>
-                    <div v-else-if="block.type === 'table'" class="text-green-500 text-xs font-semibold mb-1 flex items-center gap-1 select-none"><Table class="w-3.5 h-3.5"/> [提取表格]</div>
-                    <div v-else-if="block.type === 'doc_title'" class="text-lg font-bold text-gray-900 mb-1 border-b pb-1">{{ block.text }}</div>
-                    
-                    <div v-if="block.type !== 'doc_title'" class="whitespace-pre-wrap font-mono text-gray-600">{{ block.text }}</div>
-                  </div>
+          <div v-else-if="activeTab === 'sync'" ref="markdownContainerRef" class="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-6 bg-white scroll-smooth pb-20">
+            <div class="w-full max-w-[800px] mx-auto">
+              <div v-if="layoutData.length > 0" class="flex flex-col gap-3">
+                <div class="text-xs text-gray-500 bg-blue-50 p-2.5 rounded-lg mb-3 border border-blue-100">
+                  💡 此视图用于与左侧 PDF 进行行级别的双向点击定位。如果需要阅读带有精美排版和公式的全局文档，请切换至上方【完整文档】标签。
                 </div>
-                <div v-else class="text-gray-500 text-sm italic text-center mt-10">未能提取到结构化版面数据。</div>
+                
+                <div 
+                  v-for="block in layoutData" 
+                  :key="block.id"
+                  :id="`md-block-${block.id}`"
+                  @click="handleMarkdownBlockClick(block)"
+                  :class="['p-3 rounded-lg transition-all cursor-pointer border break-words w-full text-[14px] leading-relaxed', 
+                           activeBlockId === block.id 
+                             ? 'bg-yellow-50 border-yellow-400 shadow-sm ring-2 ring-yellow-200' 
+                             : 'bg-white border-gray-100 hover:bg-gray-50 hover:border-gray-300']"
+                  title="点击在左侧 PDF 中定位"
+                >
+                  <div v-if="block.type === 'image'" class="text-blue-500 text-xs font-semibold mb-1 flex items-center gap-1 select-none"><Image class="w-3.5 h-3.5"/> [提取图片]</div>
+                  <div v-else-if="block.type === 'table'" class="text-green-500 text-xs font-semibold mb-1 flex items-center gap-1 select-none"><Table class="w-3.5 h-3.5"/> [提取表格]</div>
+                  <div v-else-if="block.type === 'doc_title'" class="text-lg font-bold text-gray-900 mb-1 border-b pb-1">{{ block.text }}</div>
+                  
+                  <div v-if="block.type !== 'doc_title'" class="whitespace-pre-wrap font-mono text-gray-600">{{ block.text }}</div>
+                </div>
               </div>
-
-              <div v-show="activeTab === 'json'" class="w-full">
-                <JsonViewer :data="task.data?.json_content || {}" />
-              </div>
+              <div v-else class="text-gray-500 text-sm italic text-center mt-10">未能提取到结构化版面数据。</div>
             </div>
           </div>
+
+          <div v-else-if="activeTab === 'json'" class="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-6 bg-white pb-20">
+             <JsonViewer :data="task.data?.json_content || {}" />
+          </div>
+
         </div>
 
       </div>
@@ -145,6 +155,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { useTaskStore } from '@/stores'
 import { ArrowLeft, AlertCircle, RefreshCw, FileText, Columns, Download, RotateCw, Eraser, Pause, Image, Table, Trash2 } from 'lucide-vue-next'
 import StatusBadge from '@/components/StatusBadge.vue'
@@ -154,6 +165,7 @@ import JsonViewer from '@/components/JsonViewer.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import VirtualPdfViewer from '@/components/VirtualPdfViewer.vue'
 
+const { t } = useI18n()
 const router = useRouter()
 const route = useRoute()
 const taskStore = useTaskStore()
