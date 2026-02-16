@@ -140,27 +140,22 @@
       <div v-else class="h-full flex flex-col">
         <div :class="['flex-1 min-h-0 grid gap-4 h-full', layoutMode === 'split' ? 'grid-cols-2' : 'grid-cols-1']">
           
-          <div v-if="layoutMode === 'split'" class="card p-0 overflow-hidden flex flex-col h-full border-r border-gray-200">
+          <div v-if="layoutMode === 'split' || layoutMode === 'single'" class="card p-0 overflow-hidden flex flex-col h-full border-r border-gray-200">
             <div class="bg-gray-50 px-3 py-2 border-b border-gray-200 flex justify-between items-center flex-shrink-0">
               <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">{{ $t('task.sourceDocPreview') }}</span>
               <a v-if="pdfUrl" :href="pdfUrl" target="_blank" class="text-xs text-primary-600 hover:underline flex items-center">
                 {{ $t('common.openInNewWindow') }} <ExternalLink class="w-3 h-3 ml-1"/>
               </a>
             </div>
-            <div class="flex-1 bg-gray-200 relative">
-              <iframe 
-                v-if="pdfUrl" 
-                :src="pdfUrl" 
-                class="absolute inset-0 w-full h-full"
-                frameborder="0"
-              ></iframe>
+            <div class="flex-1 bg-gray-100 relative overflow-hidden">
+              <VirtualPdfViewer v-if="pdfUrl" :src="pdfUrl" />
               <div v-else class="absolute inset-0 flex items-center justify-center text-gray-400">
                 {{ $t('task.noPreview') }}
               </div>
             </div>
           </div>
 
-          <div class="card p-0 overflow-hidden flex flex-col h-full">
+          <div v-if="layoutMode === 'split' || layoutMode !== 'single'" class="card p-0 overflow-hidden flex flex-col h-full">
             <div class="bg-gray-50 px-3 py-2 border-b border-gray-200 flex justify-between items-center flex-shrink-0">
               <div class="flex items-center gap-2">
                   <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider mr-2">{{ $t('task.parseResult') }}</span>
@@ -224,6 +219,8 @@ import LoadingSpinner from '@/components/LoadingSpinner.vue'
 import MarkdownViewer from '@/components/MarkdownViewer.vue'
 import JsonViewer from '@/components/JsonViewer.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
+// 引入新组件
+import VirtualPdfViewer from '@/components/VirtualPdfViewer.vue'
 
 const { t } = useI18n()
 const route = useRoute()
