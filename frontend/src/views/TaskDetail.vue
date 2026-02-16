@@ -26,20 +26,22 @@
             <button 
               v-if="task.status === 'failed'"
               @click="initiateAction('retry')"
-              class="btn btn-white text-blue-600 border-gray-200 hover:bg-blue-50 btn-sm flex items-center shadow-sm transition-all"
+              :disabled="actionLoading"
+              class="btn btn-white text-blue-600 border-gray-200 hover:bg-blue-50 btn-sm flex items-center shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               :title="$t('task.retryTask')"
             >
-              <RotateCw class="w-4 h-4 sm:mr-1.5" />
+              <RotateCw :class="{'animate-spin': actionLoading && currentAction === 'retry'}" class="w-4 h-4 sm:mr-1.5" />
               <span class="hidden sm:inline">{{ $t('task.retryTask') }}</span>
             </button>
 
             <button
               v-if="['completed', 'failed'].includes(task.status) && task.result_path !== 'CLEARED'"
               @click="initiateAction('clearCache')"
-              class="btn btn-white text-orange-600 border-gray-200 hover:bg-orange-50 btn-sm flex items-center shadow-sm transition-all"
+              :disabled="actionLoading"
+              class="btn btn-white text-orange-600 border-gray-200 hover:bg-orange-50 btn-sm flex items-center shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               :title="$t('task.clearCache')"
             >
-              <Eraser class="w-4 h-4 sm:mr-1.5" />
+              <Eraser :class="{'animate-pulse': actionLoading && currentAction === 'clearCache'}" class="w-4 h-4 sm:mr-1.5" />
               <span class="hidden sm:inline">{{ $t('task.clearCache') }}</span>
             </button>
         </template>
@@ -71,7 +73,7 @@
       <LoadingSpinner size="lg" :text="$t('common.loading')" />
     </div>
     
-    <div v-else-if="error" class="card bg-red-50 border-red-200 mx-1">
+    <div v-else-if="error" class="card bg-red-50 border-red-200 mx-1 p-4 mb-4">
       <div class="flex items-center text-red-800">
         <AlertCircle class="w-6 h-6 mr-3" /> {{ error }}
       </div>
@@ -114,8 +116,14 @@
                <a v-if="pdfUrl" :href="pdfUrl" target="_blank" class="btn btn-white text-gray-600 border-gray-300 hover:bg-gray-50 btn-sm inline-flex items-center">
                  <Eye class="w-4 h-4 mr-2"/> {{ $t('task.sourceDocPreview') }}
                </a>
-               <button v-if="task.status === 'failed'" @click="initiateAction('retry')" class="btn btn-primary btn-sm inline-flex items-center">
-                 <RotateCw class="w-4 h-4 mr-2"/> {{ $t('task.retryTask') }}
+               <button 
+                 v-if="task.status === 'failed'" 
+                 @click="initiateAction('retry')" 
+                 :disabled="actionLoading"
+                 class="btn btn-primary btn-sm inline-flex items-center disabled:opacity-50"
+               >
+                 <RotateCw :class="{'animate-spin': actionLoading && currentAction === 'retry'}" class="w-4 h-4 mr-2"/> 
+                 {{ $t('task.retryTask') }}
                </button>
             </div>
          </div>
@@ -140,22 +148,26 @@
       <div v-else class="h-full flex flex-col">
         <div :class="['flex-1 min-h-0 grid gap-4 h-full', layoutMode === 'split' ? 'grid-cols-2' : 'grid-cols-1']">
           
-          <div v-if="layoutMode === 'split' || layoutMode === 'single'" class="card p-0 overflow-hidden flex flex-col h-full border-r border-gray-200">
+          <div v-if="layoutMode === 'split' || (layoutMode === 'single' && pdfUrl)" class="card p-0 overflow-hidden flex flex-col h-full border-r border-gray-200">
             <div class="bg-gray-50 px-3 py-2 border-b border-gray-200 flex justify-between items-center flex-shrink-0">
               <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">{{ $t('task.sourceDocPreview') }}</span>
               <a v-if="pdfUrl" :href="pdfUrl" target="_blank" class="text-xs text-primary-600 hover:underline flex items-center">
                 {{ $t('common.openInNewWindow') }} <ExternalLink class="w-3 h-3 ml-1"/>
               </a>
             </div>
-            <div class="flex-1 bg-gray-100 relative overflow-hidden">
-              <VirtualPdfViewer v-if="pdfUrl" :src="pdfUrl" />
+            
+            <div class="flex-1 bg-gray-200 relative overflow-hidden">
+              <VirtualPdfViewer 
+                v-if="pdfUrl" 
+                :src="pdfUrl" 
+              />
               <div v-else class="absolute inset-0 flex items-center justify-center text-gray-400">
                 {{ $t('task.noPreview') }}
               </div>
             </div>
           </div>
 
-          <div v-if="layoutMode === 'split' || layoutMode !== 'single'" class="card p-0 overflow-hidden flex flex-col h-full">
+          <div v-if="layoutMode === 'split' || layoutMode !== 'single' || !pdfUrl" class="card p-0 overflow-hidden flex flex-col h-full">
             <div class="bg-gray-50 px-3 py-2 border-b border-gray-200 flex justify-between items-center flex-shrink-0">
               <div class="flex items-center gap-2">
                   <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider mr-2">{{ $t('task.parseResult') }}</span>
@@ -206,7 +218,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useTaskStore } from '@/stores'
@@ -219,7 +231,7 @@ import LoadingSpinner from '@/components/LoadingSpinner.vue'
 import MarkdownViewer from '@/components/MarkdownViewer.vue'
 import JsonViewer from '@/components/JsonViewer.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
-// 引入新组件
+// 【关键】引入虚拟滚动阅读器组件
 import VirtualPdfViewer from '@/components/VirtualPdfViewer.vue'
 
 const { t } = useI18n()
@@ -229,6 +241,7 @@ const taskStore = useTaskStore()
 const taskId = computed(() => route.params.id as string)
 const task = computed(() => taskStore.currentTask)
 const loading = ref(false)
+const actionLoading = ref(false) // 专门用于操作按钮的 loading
 const error = ref('')
 
 const activeTab = ref<'markdown' | 'json'>('markdown')
@@ -273,7 +286,7 @@ function initiateAction(action: 'retry' | 'clearCache') {
 async function executeAction() {
   if (!currentAction.value) return
   
-  loading.value = true
+  actionLoading.value = true // 使用 actionLoading 而不是全局 loading
   try {
     if (currentAction.value === 'retry') {
       await taskStore.retryTask(taskId.value)
@@ -289,7 +302,7 @@ async function executeAction() {
   } catch (err: any) {
     error.value = err.message || 'Action failed'
   } finally {
-    loading.value = false
+    actionLoading.value = false
     currentAction.value = null
   }
 }
