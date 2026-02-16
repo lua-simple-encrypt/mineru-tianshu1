@@ -3,7 +3,7 @@ PaddleOCR-VL-VLLM 解析引擎 (Optimized + Bidirectional Layout Support)
 单例模式，每个进程只加载一次基础版面识别模型, OCR部分调用配置的API
 
 功能增强 (2026-02-15):
-1. [修复] 严格过滤 vLLM 请求参数，修复 'NoneType object is not subscriptable' 错误
+1. [修复] 修复 res['res'] 类型不一致导致的 AttributeError 崩溃
 2. [双向定位] 输出包含 bbox 的结构化数据 (json_content)
 3. [资源管理] 智能显存休眠 (Auto-Sleep) 和自动唤醒 (Auto-Wakeup)
 4. [稳定性] 强制单线程推理以解决 vLLM Tokenizer 竞态崩溃
@@ -201,9 +201,7 @@ class PaddleOCRVLVLLMEngine:
             pipeline = self._load_pipeline()
 
             # =========================================================
-            # [关键修复] 参数白名单过滤
-            # PaddleOCR VLLM 模式下不支持某些高级布局参数，传递它们会导致 crash
-            # 只允许以下参数通过
+            # 参数白名单过滤 (修复 NoneType error)
             # =========================================================
             allowed_params = {
                 "use_doc_orientation_classify",
@@ -214,7 +212,6 @@ class PaddleOCRVLVLLMEngine:
                 "use_ocr_for_image_block",
             }
             
-            # 参数映射 (保持与 Worker 一致)
             param_mapping = {
                 "useDocOrientationClassify": "use_doc_orientation_classify",
                 "useDocUnwarping": "use_doc_unwarping",
@@ -226,29 +223,25 @@ class PaddleOCRVLVLLMEngine:
 
             predict_params = {"input": str(file_path)}
             
-            # 1. 映射并过滤参数
             for k, v in kwargs.items():
-                target_key = param_mapping.get(k, k) # 如果在映射表中则映射，否则保持原名
+                target_key = param_mapping.get(k, k)
                 if target_key in allowed_params:
                     predict_params[target_key] = v
                 else:
-                    # 记录被过滤的参数 (Debug用)
                     logger.debug(f"ℹ️ Filtered param for VLLM mode: {k}={v}")
             
-            # 2. 强制默认值 (VLLM 模式下某些功能必须关闭以防崩溃)
+            # 强制默认值
             predict_params["use_layout_parsing"] = True
-            predict_params["use_doc_orientation_classify"] = False # 强制关闭
-            predict_params["use_doc_unwarping"] = False          # 强制关闭
-
-            logger.info(f"🚀 Starting inference with filtered params: {json.dumps(predict_params)}")
+            predict_params["use_doc_orientation_classify"] = False
+            predict_params["use_doc_unwarping"] = False
 
             # 执行推理
             output_generator = pipeline.predict(**predict_params)
 
             markdown_pages = []
             markdown_list_obj = []
-            json_list = []      # 原始分页 JSON
-            full_content_list = [] # [新增] 用于双向定位的扁平化结构
+            json_list = []
+            full_content_list = [] # [新增] 用于双向定位
             page_count = 0
 
             for res in output_generator:
@@ -259,26 +252,38 @@ class PaddleOCRVLVLLMEngine:
                 page_dir.mkdir(parents=True, exist_ok=True)
 
                 # 1. 保存图片和原始 JSON
-                if hasattr(res, "save_to_img"): res.save_to_img(str(page_dir))
-                if hasattr(res, "save_to_json"): res.save_to_json(str(page_dir))
+                try:
+                    if hasattr(res, "save_to_img"): res.save_to_img(str(page_dir))
+                    if hasattr(res, "save_to_json"): res.save_to_json(str(page_dir))
+                except Exception as e:
+                    logger.warning(f"Page {page_count} save error: {e}")
 
                 # 2. [核心修复] 提取结构化数据 (BBox) 用于双向定位
                 if hasattr(res, "json") and res.json:
                     json_list.append(res.json)
-                    # PaddleX 结果格式解析: {'res': [{'bbox': [x,y,x,y], 'text': '...', 'type': '...'}, ...]}
                     if isinstance(res.json, dict) and 'res' in res.json:
                         blocks = res.json['res']
+                        
+                        # [FIX] 严格类型检查，防止崩溃
+                        if not isinstance(blocks, list):
+                            # 如果是单个对象且有bbox，包装成列表
+                            if isinstance(blocks, dict) and ('bbox' in blocks or 'layout_bbox' in blocks):
+                                blocks = [blocks]
+                            else:
+                                # 可能是元数据（如 'input_path'），跳过
+                                blocks = []
+
                         for block in blocks:
-                            # 构造前端可读的 Block 数据
+                            if not isinstance(block, dict): continue
+
                             clean_block = {
-                                "id": len(full_content_list) + 1,  # 生成全局 ID
-                                "page_idx": page_count - 1,        # 0-based 页索引
+                                "id": len(full_content_list) + 1,
+                                "page_idx": page_count - 1,
                                 "type": block.get('type', 'text'),
                                 "text": block.get('text', ''),
-                                "bbox": block.get('layout_bbox') or block.get('bbox') or [], # 提取坐标
+                                "bbox": block.get('layout_bbox') or block.get('bbox') or [],
                                 "score": block.get('score', 0)
                             }
-                            # 只有包含有效坐标的块才加入，供前端定位
                             if clean_block['bbox']:
                                 full_content_list.append(clean_block)
 
@@ -310,10 +315,15 @@ class PaddleOCRVLVLLMEngine:
             # 保存最终文件
             (output_path / "result.md").write_text(markdown_text, encoding="utf-8")
             
-            # [关键] 构造 result.json，结构必须包含前端可见的 full_content_list
+            # [关键] 构造 result.json
+            final_json_data = full_content_list if full_content_list else {
+                "total_pages": page_count,
+                "pages": json_list
+            }
+            
             json_file = output_path / "result.json"
             with open(json_file, "w", encoding="utf-8") as f:
-                json.dump(full_content_list, f, ensure_ascii=False, indent=2)
+                json.dump(final_json_data, f, ensure_ascii=False, indent=2)
 
             return {
                 "success": True,
@@ -321,7 +331,7 @@ class PaddleOCRVLVLLMEngine:
                 "markdown": markdown_text,
                 "markdown_file": str(output_path / "result.md"),
                 "json_file": str(json_file),
-                "json_content": full_content_list # 返回给 Worker，Worker 负责将其存入数据库
+                "json_content": full_content_list
             }
 
         except Exception as e:
