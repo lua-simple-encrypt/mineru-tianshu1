@@ -12,37 +12,17 @@
       </div>
       <div class="text-gray-900 font-semibold text-lg mb-1">PDF 加载失败</div>
       <div class="text-gray-500 text-xs break-all max-w-md bg-gray-50 p-2 rounded border border-gray-100">{{ error }}</div>
-      <button 
-        @click="retry" 
-        class="mt-6 px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition shadow-sm text-sm font-medium flex items-center"
-      >
-        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.058M20.9 14.25a8.5 8.5 0 11-6.1-1.53M22 22v-5h-5" />
-        </svg>
+      <button @click="retry" class="mt-6 px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition shadow-sm text-sm font-medium flex items-center">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.058M20.9 14.25a8.5 8.5 0 11-6.1-1.53M22 22v-5h-5" /></svg>
         重试
       </button>
     </div>
 
-    <div 
-      ref="containerRef" 
-      class="flex-1 overflow-y-auto relative w-full custom-scrollbar outline-none" 
-      @scroll="onScroll"
-      tabindex="0"
-    >
+    <div ref="containerRef" class="flex-1 overflow-y-auto relative w-full custom-scrollbar outline-none scroll-smooth" @scroll="onScroll" tabindex="0">
       <div :style="{ height: totalHeight + 'px' }" class="relative w-full">
-        <div
-          v-for="page in visiblePages"
-          :key="page.index"
-          class="absolute left-0 w-full flex justify-center transition-opacity duration-200"
-          :style="{ 
-            top: page.top + 'px', 
-            height: page.height + 'px' 
-          }"
-        >
-          <div 
-            class="bg-white shadow-sm relative transition-shadow hover:shadow-md"
-            :style="{ width: page.width + 'px', height: page.height + 'px' }"
-          >
+        <div v-for="page in visiblePages" :key="page.index" class="absolute left-0 w-full flex justify-center transition-opacity duration-200" :style="{ top: page.top + 'px', height: page.height + 'px' }">
+          <div class="bg-white shadow-sm relative transition-shadow hover:shadow-md" :style="{ width: page.width + 'px', height: page.height + 'px' }">
+            
             <div v-if="!page.rendered" class="absolute inset-0 flex items-center justify-center bg-white z-10">
               <div class="flex flex-col items-center">
                 <div class="w-8 h-8 border-3 border-blue-100 border-t-blue-600 rounded-full animate-spin mb-2"></div>
@@ -50,26 +30,23 @@
               </div>
             </div>
             
-            <canvas 
-              :ref="(el) => triggerRender(el, page)" 
-              class="block w-full h-full relative z-0"
-            ></canvas>
+            <canvas :ref="(el) => triggerRender(el, page)" class="block w-full h-full relative z-0"></canvas>
 
             <div v-if="page.rendered && layoutDataMap[page.index]" class="absolute inset-0 z-20 pointer-events-none">
               <div
                 v-for="block in layoutDataMap[page.index]"
                 :key="block.id"
                 class="absolute cursor-pointer pointer-events-auto hover:bg-blue-500/20 border border-transparent hover:border-blue-400 transition-colors rounded-[2px]"
-                :style="getBlockStyle(block.bbox)"
-                @click.stop="onBlockClick(block)"
-                :title="`定位到解析内容 (ID: ${block.id})`"
+                :style="getBlockStyle(page.index, block.bbox)"
+                @click.stop="$emit('block-click', block)"
+                :title="`定位到内容 (ID: ${block.id})`"
               ></div>
             </div>
 
             <div 
               v-if="highlight && highlight.pageIndex === page.index"
               class="absolute z-30 border-[3px] border-red-500 bg-red-500/10 animate-pulse pointer-events-none box-border rounded-[2px] shadow-[0_0_12px_rgba(239,68,68,0.6)]"
-              :style="getBlockStyle(highlight.bbox)"
+              :style="getBlockStyle(page.index, highlight.bbox)"
             ></div>
 
           </div>
@@ -99,7 +76,7 @@ const emit = defineEmits<{
   (e: 'scroll', payload: { scrollTop: number; scrollHeight: number; clientHeight: number }): void
   (e: 'block-click', block: any): void
   (e: 'page-loaded', total: number): void
-  (e: 'visible-block-change', blockId: number): void
+  (e: 'layout-ready'): void // 通知父组件布局完毕，可以计算滚动映射了
 }>()
 
 function debounce<T extends (...args: any[]) => void>(fn: T, delay: number) {
@@ -149,6 +126,34 @@ const layoutDataMap = computed(() => {
   return map
 })
 
+// 🚀 核心优化：计算每一页的 OCR 坐标缩放率（解决框对不上位置的问题）
+const pageOcrScales = computed(() => {
+  const scales: Record<number, number> = {};
+  for (const page of pagesMetaData.value) {
+    const blocks = layoutDataMap.value[page.index];
+    if (!blocks || blocks.length === 0) {
+      scales[page.index] = scale.value;
+      continue;
+    }
+    let maxX = 0;
+    blocks.forEach(b => {
+      let x1 = 0;
+      if (b.bbox.length === 4 && typeof b.bbox[0] === 'number') x1 = b.bbox[2];
+      else if (b.bbox.length === 4 && Array.isArray(b.bbox[0])) x1 = Math.max(...b.bbox.map((p:any)=>p[0]));
+      if (x1 > maxX) maxX = x1;
+    });
+
+    // 如果 OCR 坐标的宽度超过了 PDF 实际视口宽度，说明它使用的是大图绝对坐标，必须计算缩放比
+    if (maxX > page.viewport.width) {
+      const estimatedOcrW = maxX / 0.95; // 预留 5% 边距
+      scales[page.index] = page.width / estimatedOcrW;
+    } else {
+      scales[page.index] = scale.value; 
+    }
+  }
+  return scales;
+});
+
 const visiblePages = computed(() => {
   if (pagesMetaData.value.length === 0) return []
   const startY = scrollTop.value - containerHeight.value * 1.5
@@ -159,11 +164,7 @@ const visiblePages = computed(() => {
     const pageBottom = page.top + page.height
     if (pageBottom < startY) continue
     if (page.top > endY) break
-    
-    result.push({
-      ...page,
-      rendered: renderedPages.has(page.index)
-    })
+    result.push({ ...page, rendered: renderedPages.has(page.index) })
   }
   return result
 })
@@ -198,9 +199,7 @@ const loadPdf = async (url: string) => {
   renderTasks.forEach(t => t.cancel())
   renderTasks.clear()
   
-  loading.value = true
-  error.value = null
-  progress.value = 5
+  loading.value = true; error.value = null; progress.value = 5;
   
   try {
     const response = await fetch(url)
@@ -228,15 +227,13 @@ const loadPdf = async (url: string) => {
   }
 }
 
+// 🚀 修复白屏死循环：递归等待容器宽度分配
 const initLayout = async (retryCount = 0) => {
   if (!pdfDoc.value || !containerRef.value) return
   
   const containerW = containerRef.value.clientWidth
-  // 智能轮询：防止被隐藏的 Grid/Flex 导致 clientWidth 为 0 造成的彻底白屏
   if (containerW <= 0) {
-    if (retryCount < 20) {
-      setTimeout(() => initLayout(retryCount + 1), 100)
-    }
+    if (retryCount < 30) setTimeout(() => initLayout(retryCount + 1), 100)
     return
   }
 
@@ -256,26 +253,26 @@ const initLayout = async (retryCount = 0) => {
     const fitScale = targetWidth / viewport.width
     scale.value = fitScale
     
-    const scaledViewport = page1.getViewport({ scale: fitScale })
-    const pageH = scaledViewport.height
-    const pageW = scaledViewport.width
-    
     const pages = []
     let currentTop = PAGE_GAP
     
     for (let i = 1; i <= pdfDoc.value.numPages; i++) {
+      const scaledViewport = page1.getViewport({ scale: fitScale })
       pages.push({
         index: i,
-        width: pageW,
-        height: pageH,
+        width: scaledViewport.width,
+        height: scaledViewport.height,
         top: currentTop,
         viewport: scaledViewport
       })
-      currentTop += pageH + PAGE_GAP
+      currentTop += scaledViewport.height + PAGE_GAP
     }
     
     pagesMetaData.value = pages
     totalHeight.value = currentTop + PAGE_GAP
+    
+    // 通知外部布局完成，可以开始构建双栏映射了
+    nextTick(() => { emit('layout-ready') })
   } catch (e) {
     console.error("Layout init failed:", e)
   } finally {
@@ -283,7 +280,6 @@ const initLayout = async (retryCount = 0) => {
   }
 }
 
-// 稳定触发渲染，解决白屏滑动才出的 bug
 const triggerRender = (el: any, page: any) => {
   if (!el || !pdfDoc.value || page.rendered || renderTasks.has(page.index)) return;
   renderPage(el, page);
@@ -309,85 +305,57 @@ const renderPage = async (canvas: HTMLCanvasElement, pageMeta: any) => {
     renderTasks.set(pageMeta.index, renderTask)
     await renderTask.promise
     renderTasks.delete(pageMeta.index)
-    
   } catch (err: any) {
-    if (err.name !== 'RenderingCancelledException') {
-      console.warn(`Page ${pageMeta.index} render warning:`, err)
-    }
+    if (err.name !== 'RenderingCancelledException') console.warn(`Render warning:`, err)
     renderedPages.delete(pageMeta.index)
   }
 }
 
-const getBlockStyle = (bbox: any) => {
+const getBlockStyle = (pageIndex: number, bbox: any) => {
   if (!bbox || !Array.isArray(bbox) || bbox.length === 0) return { display: 'none' }
   let x0 = 0, y0 = 0, x1 = 0, y1 = 0;
   
   if (bbox.length === 4 && typeof bbox[0] === 'number') {
     [x0, y0, x1, y1] = bbox as number[];
   } else if (bbox.length === 4 && Array.isArray(bbox[0])) {
-    const xs = bbox.map((p: number[]) => p[0]);
-    const ys = bbox.map((p: number[]) => p[1]);
-    x0 = Math.min(...xs);
-    y0 = Math.min(...ys);
-    x1 = Math.max(...xs);
-    y1 = Math.max(...ys);
-  } else {
-    return { display: 'none' }
-  }
+    const xs = bbox.map((p: number[]) => p[0]); const ys = bbox.map((p: number[]) => p[1]);
+    x0 = Math.min(...xs); y0 = Math.min(...ys); x1 = Math.max(...xs); y1 = Math.max(...ys);
+  } else { return { display: 'none' } }
 
-  const w = x1 - x0;
-  const h = y1 - y0;
-  const s = scale.value; 
-  
-  return {
-    left: `${x0 * s}px`,
-    top: `${y0 * s}px`,
-    width: `${Math.max(w * s, 4)}px`,
-    height: `${Math.max(h * s, 4)}px`
-  }
+  // 关键：使用当前页专用的坐标转换比例
+  const s = pageOcrScales.value[pageIndex] || scale.value; 
+  return { left: `${x0 * s}px`, top: `${y0 * s}px`, width: `${Math.max((x1-x0)*s, 4)}px`, height: `${Math.max((y1-y0)*s, 4)}px` }
 }
-
-const onBlockClick = (block: any) => {
-  emit('block-click', block);
-}
-
-// 核心优化：防抖计算当前可视区域中最顶部的 Block (用于语义同步滚动)
-const calculateActiveBlock = debounce(() => {
-  const center = scrollTop.value + 60; // 取视口偏上的位置
-  const page = pagesMetaData.value.find(p => center >= p.top && center <= (p.top + p.height + PAGE_GAP));
-  if (!page) return;
-
-  const blocks = layoutDataMap.value[page.index];
-  if (!blocks || blocks.length === 0) return;
-
-  const relativeY = (center - page.top) / scale.value;
-  let activeBlock = blocks[0];
-  
-  for(const b of blocks) {
-     let by = Array.isArray(b.bbox[0]) ? Math.min(...b.bbox.map((p:any)=>p[1])) : b.bbox[1];
-     if (by >= relativeY) {
-         activeBlock = b;
-         break;
-     }
-  }
-  
-  if (activeBlock) {
-     emit('visible-block-change', activeBlock.id);
-  }
-}, 80);
 
 const onScroll = (e: Event) => {
   const target = e.target as HTMLElement
   scrollTop.value = target.scrollTop
-  emit('scroll', {
-    scrollTop: target.scrollTop,
-    scrollHeight: target.scrollHeight,
-    clientHeight: target.clientHeight
-  })
-  calculateActiveBlock()
+  emit('scroll', { scrollTop: target.scrollTop, scrollHeight: target.scrollHeight, clientHeight: target.clientHeight })
 }
 
-// 点击时：带有红色闪烁框的平滑跳转 (Smooth Scroll)
+// 暴露 API: 获取某个段落在 PDF 中的绝对 Y 轴高度 (用于精准插值同步)
+const getBlockScrollY = (block: any): number => {
+  const pageNum = (typeof block.page_idx === 'number' ? block.page_idx : block.page_id) + 1;
+  const pageMeta = pagesMetaData.value.find(p => p.index === pageNum);
+  if (!pageMeta) return 0;
+
+  let y0 = 0;
+  if (block.bbox && block.bbox.length === 4) {
+      if (typeof block.bbox[0] === 'number') y0 = block.bbox[1];
+      else if (Array.isArray(block.bbox[0])) y0 = Math.min(...block.bbox.map((p:any)=>p[1]));
+  }
+  const s = pageOcrScales.value[pageNum] || scale.value;
+  return pageMeta.top + (y0 * s);
+}
+
+// 暴露 API: 直接滚动到某个 Y 坐标
+const scrollToY = (y: number, behavior: 'auto' | 'smooth' = 'auto') => {
+  if (containerRef.value) {
+    containerRef.value.scrollTo({ top: Math.max(0, y), behavior });
+  }
+}
+
+// 暴露 API: 高亮区块并居中滚动
 const highlightBlock = (pageIndex: number, bbox: any) => {
   if (!containerRef.value) return
   highlight.value = { pageIndex, bbox }
@@ -397,23 +365,10 @@ const highlightBlock = (pageIndex: number, bbox: any) => {
     if (bbox && bbox.length === 4) {
        blockY = Array.isArray(bbox[0]) ? Math.min(...bbox.map((p:any) => p[1])) : bbox[1];
     }
-    const targetScroll = pageMeta.top + (blockY * scale.value) - (containerHeight.value / 4)
+    const s = pageOcrScales.value[pageIndex] || scale.value;
+    const targetScroll = pageMeta.top + (blockY * s) - (containerHeight.value / 3);
     containerRef.value.scrollTo({ top: Math.max(0, targetScroll), behavior: 'smooth' })
     setTimeout(() => { highlight.value = null }, 3000)
-  }
-}
-
-// 同步滑动时：无动画静默跳转 (Auto Scroll，防卡顿)
-const silentScrollToBlock = (pageIndex: number, bbox: any) => {
-  if (!containerRef.value) return
-  const pageMeta = pagesMetaData.value.find(p => p.index === pageIndex)
-  if (pageMeta) {
-    let blockY = 0;
-    if (bbox && bbox.length === 4) {
-       blockY = Array.isArray(bbox[0]) ? Math.min(...bbox.map((p:any) => p[1])) : bbox[1];
-    }
-    const targetScroll = pageMeta.top + (blockY * scale.value) - 40 
-    containerRef.value.scrollTo({ top: Math.max(0, targetScroll), behavior: 'auto' }) 
   }
 }
 
@@ -426,17 +381,14 @@ onMounted(() => {
     const handleResize = debounce(() => {
       if (!containerRef.value) return
       const currentWidth = containerRef.value.clientWidth
-      
-      // 尺寸复苏，立即启动布局渲染
       if (currentWidth > 0 && pagesMetaData.value.length === 0 && pdfDoc.value) {
-         initLayout()
+         initLayout() // 从白屏恢复
       } else if (currentWidth > 0 && Math.abs(currentWidth - lastWidth) > 1) {
-        if (!processing.value && pdfDoc.value) initLayout()
+         if (!processing.value && pdfDoc.value) initLayout()
       } else if (currentWidth > 0) {
-        containerHeight.value = containerRef.value.clientHeight
+         containerHeight.value = containerRef.value.clientHeight
       }
     }, 150)
-
     resizeObserver = new ResizeObserver(handleResize)
     resizeObserver.observe(containerRef.value)
   }
@@ -445,15 +397,11 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (resizeObserver) resizeObserver.disconnect()
-  if (pdfDoc.value) {
-    pdfDoc.value.destroy()
-    pdfDoc.value = null
-  }
-  renderedPages.clear()
-  renderTasks.forEach(t => t.cancel())
+  if (pdfDoc.value) { pdfDoc.value.destroy(); pdfDoc.value = null; }
+  renderedPages.clear(); renderTasks.forEach(t => t.cancel());
 })
 
-defineExpose({ highlightBlock, silentScrollToBlock, currentPage })
+defineExpose({ highlightBlock, getBlockScrollY, scrollToY })
 </script>
 
 <style scoped>
