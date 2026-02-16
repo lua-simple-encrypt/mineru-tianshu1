@@ -36,7 +36,7 @@
             class="absolute cursor-pointer pointer-events-auto border border-transparent hover:border-blue-400 hover:bg-blue-500/15 transition-all rounded-[2px]"
             :style="getBlockStyle(page.id, block.bbox)"
             @click.stop="onBlockClick(block)"
-            :title="`定位到解析结果`"
+            :title="`定位到解析结果 (ID: ${block.id})`"
           ></div>
         </div>
 
@@ -57,7 +57,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import * as pdfjsLib from 'pdfjs-dist'
 import pdfWorker from 'pdfjs-dist/build/pdf.worker?url'
 
@@ -65,18 +65,16 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker
 
 const props = defineProps<{
   src: string | null
-  layoutData?: any[] // 后端返回的 JSON 段落数组
+  layoutData?: any[] 
 }>()
 
 const emit = defineEmits<{
   (e: 'block-click', block: any): void
 }>()
 
-// DOM 引用
 const scrollContainer = ref<HTMLElement | null>(null)
 let pdfProxy: pdfjsLib.PDFDocumentProxy | null = null
 
-// 状态
 const loading = ref(false)
 const processing = ref(false)
 const progress = ref(0)
@@ -86,22 +84,27 @@ const highlightTarget = ref<{ pageIndex: number; bbox: any[] } | null>(null)
 const scrollTop = ref(0)
 const containerHeight = ref(0)
 const totalPages = ref(0)
-const scale = ref(1.0)
 
-// 页面数据存储
 interface PageData {
   id: number
   width: number
   height: number
   viewport: any
   rendered: boolean
+  pdfWidth: number // PDF 原生宽度，用于坐标换算
 }
 const pages = ref<PageData[]>([])
 
-// 预处理坐标缩放比 (解决因图片原尺寸过大导致的错位)
-const ocrScales = ref<Record<number, number>>({})
+// 🚀 核心一：后端传来的 JSON 数据不仅包含 parsing_res_list，还有 width 和 height！
+// 这些全局属性决定了后端生成 BBox 的基准坐标系。
+const sourcePdfWidth = computed(() => {
+  // 提取 JSON 中根节点的 width 属性，如果没有则默认为 A4 (约 595 磅)
+  if (props.layoutData && props.layoutData.length > 0 && props.layoutData[0]._root_width) {
+    return props.layoutData[0]._root_width;
+  }
+  return 595.28; 
+})
 
-// 将后端的扁平数组按页码归类，方便页面渲染对应框
 const layoutMap = computed(() => {
   const map: Record<number, any[]> = {}
   if (!props.layoutData) return map
@@ -113,39 +116,6 @@ const layoutMap = computed(() => {
   return map
 })
 
-// 计算可视页面，释放看不见的内存
-const visiblePages = computed(() => {
-  if (pages.value.length === 0) return []
-  const startY = scrollTop.value - containerHeight.value * 1.5
-  const endY = scrollTop.value + containerHeight.value * 2.5 
-  
-  let currentTop = 0
-  const result = []
-  
-  for (const page of pages.value) {
-    const pageBottom = currentTop + page.height
-    if (pageBottom >= startY && currentTop <= endY) {
-      result.push({ ...page, top: currentTop })
-    }
-    currentTop += page.height + 16 // 16px 是 gap
-  }
-  return result
-})
-
-const currentPage = computed(() => {
-  if (pages.value.length === 0) return 0
-  let currentTop = 0
-  const center = scrollTop.value + (containerHeight.value / 3)
-  for (const page of pages.value) {
-    if (center >= currentTop && center <= currentTop + page.height + 16) {
-      return page.id
-    }
-    currentTop += page.height + 16
-  }
-  return 1
-})
-
-// 🚀 核心一：IntersectionObserver 取代滚动监听，彻底解决白屏
 let observer: IntersectionObserver | null = null
 const renderTasks = new Map<number, any>()
 
@@ -165,7 +135,7 @@ const initObserver = () => {
     })
   }, {
     root: scrollContainer.value,
-    rootMargin: '200px 0px', 
+    rootMargin: '300px 0px', 
     threshold: 0.01
   })
 
@@ -195,13 +165,11 @@ const loadPdf = async (url: string) => {
   }
 }
 
-// 构建所有页面的高度骨架
 const buildPageSkeletons = async () => {
   if (!pdfProxy || !scrollContainer.value) return
   processing.value = true
 
-  const containerW = scrollContainer.value.clientWidth - 32
-  // 如果宽度未分配，重试
+  const containerW = scrollContainer.value.clientWidth - 40
   if (containerW <= 0) {
     setTimeout(buildPageSkeletons, 100)
     return
@@ -209,23 +177,25 @@ const buildPageSkeletons = async () => {
   containerHeight.value = scrollContainer.value.clientHeight
 
   const newPages: PageData[] = []
+  
+  // 基准第一页，用于定宽
   const page1 = await pdfProxy.getPage(1)
   const baseViewport = page1.getViewport({ scale: 1 })
-  const fitScale = Math.min(containerW / baseViewport.width, 1.8)
-  scale.value = fitScale
+  const fitScale = Math.min(containerW / baseViewport.width, 1.8) 
 
   for (let i = 1; i <= totalPages.value; i++) {
-    const vp = i === 1 ? page1.getViewport({ scale: fitScale }) : (await pdfProxy.getPage(i)).getViewport({ scale: fitScale })
-    newPages.push({ id: i, width: vp.width, height: vp.height, viewport: vp, rendered: false })
+    const p = await pdfProxy.getPage(i)
+    const vp = p.getViewport({ scale: fitScale })
+    // 保存原始宽度用于比率计算
+    const rawVp = p.getViewport({ scale: 1 }) 
+    newPages.push({ id: i, width: vp.width, height: vp.height, viewport: vp, rendered: false, pdfWidth: rawVp.width })
   }
   
   pages.value = newPages
-  calculateOcrScales(newPages, fitScale)
   processing.value = false
   initObserver()
 }
 
-// 渲染 Canvas
 const renderCanvas = async (page: PageData) => {
   if (!pdfProxy) return
   renderTasks.set(page.id, true)
@@ -251,40 +221,10 @@ const renderCanvas = async (page: PageData) => {
   }
 }
 
-// 🚀 核心二：计算绝对坐标转换缩放比，保证红框不乱飞
-const calculateOcrScales = (pageList: PageData[], baseScale: number) => {
-  const scales: Record<number, number> = {}
-  for (const p of pageList) {
-    const blocks = layoutMap.value[p.id]
-    if (!blocks || blocks.length === 0) {
-      scales[p.id] = baseScale; continue;
-    }
-    
-    let maxX = 0
-    blocks.forEach(b => {
-      let x1 = 0
-      if (b.bbox.length === 4 && typeof b.bbox[0] === 'number') x1 = b.bbox[2]
-      else if (b.bbox.length === 4 && Array.isArray(b.bbox[0])) x1 = Math.max(...b.bbox.map((pt:any)=>pt[0]))
-      if (x1 > maxX) maxX = x1
-    })
-
-    // PDF.js 底层 baseWidth
-    const basePdfWidth = p.viewport.width / baseScale;
-    
-    // 如果返回的坐标远大于原始尺寸，说明后端的 bbox 是基于大图生成的
-    if (maxX > basePdfWidth + 10) {
-      // ratio: 将大图坐标缩放回 PDF原始尺寸 的比例
-      const ratio = basePdfWidth / (maxX / 0.95); 
-      scales[p.id] = ratio * baseScale;
-    } else {
-      scales[p.id] = baseScale
-    }
-  }
-  ocrScales.value = scales
-}
-
+// 🚀 核心二：绝对精准的坐标系换算算法
 const getBlockStyle = (pageId: number, bbox: any) => {
   if (!bbox || !Array.isArray(bbox) || bbox.length === 0) return { display: 'none' }
+  
   let x0 = 0, y0 = 0, x1 = 0, y1 = 0;
   
   if (bbox.length === 4 && typeof bbox[0] === 'number') {
@@ -294,14 +234,27 @@ const getBlockStyle = (pageId: number, bbox: any) => {
     x0 = Math.min(...xs); y0 = Math.min(...ys); x1 = Math.max(...xs); y1 = Math.max(...ys);
   } else { return { display: 'none' } }
 
-  const s = ocrScales.value[pageId] || scale.value; 
+  const pageInfo = pages.value.find(p => p.id === pageId)
+  if (!pageInfo) return { display: 'none' }
+
+  // 后端的 BBox 坐标是以 sourcePdfWidth 为基准的。
+  // 前端 Canvas 的渲染宽度是 pageInfo.width。
+  // 所以：前端缩放率 = 前端宽度 / 后端基准宽度
+  const scaleRatio = pageInfo.width / sourcePdfWidth.value;
+
+  const finalX0 = x0 * scaleRatio;
+  const finalY0 = y0 * scaleRatio;
+  const finalW = Math.max((x1 - x0) * scaleRatio, 5); // 最小预留 5px
+  const finalH = Math.max((y1 - y0) * scaleRatio, 5);
+  
   return { 
-    left: `${x0 * s}px`, top: `${y0 * s}px`, 
-    width: `${Math.max((x1-x0)*s, 4)}px`, height: `${Math.max((y1-y0)*s, 4)}px` 
+    left: `${finalX0}px`, 
+    top: `${finalY0}px`, 
+    width: `${finalW}px`, 
+    height: `${finalH}px` 
   }
 }
 
-// 暴露 API
 const highlightBlock = (pageIndex: number, bbox: any) => {
   if (!scrollContainer.value) return
   highlightTarget.value = { pageIndex, bbox }
@@ -312,21 +265,29 @@ const highlightBlock = (pageIndex: number, bbox: any) => {
     if (bbox && bbox.length === 4) {
       blockY = typeof bbox[0] === 'number' ? bbox[1] : Math.min(...bbox.map((p:any)=>p[1]))
     }
-    const s = ocrScales.value[pageIndex] || scale.value;
-    const targetScroll = pageNode.offsetTop + (blockY * s) - (scrollContainer.value.clientHeight / 4)
+    const pageInfo = pages.value.find(p => p.id === pageIndex)
+    const scaleRatio = pageInfo ? (pageInfo.width / sourcePdfWidth.value) : 1;
+    
+    // 滚动时，将目标位置放在视口正中间稍偏上
+    const targetScroll = pageNode.offsetTop + (blockY * scaleRatio) - (scrollContainer.value.clientHeight / 3)
     scrollContainer.value.scrollTo({ top: Math.max(0, targetScroll), behavior: 'smooth' })
     
     setTimeout(() => { highlightTarget.value = null }, 3000)
   }
 }
 
-const onBlockClick = (block: any) => {
-  emit('block-click', block)
-}
+const onBlockClick = (block: any) => { emit('block-click', block) }
+const onScroll = (e: Event) => { scrollTop.value = (e.target as HTMLElement).scrollTop }
 
-const onScroll = (e: Event) => {
-  scrollTop.value = (e.target as HTMLElement).scrollTop
-}
+const currentPage = computed(() => {
+  if (pages.value.length === 0) return 0
+  const center = scrollTop.value + (containerHeight.value / 3)
+  const page = pages.value.find(p => {
+     const pageTop = (document.getElementById(`pdf-page-${p.id}`)?.offsetTop) || 0;
+     return center >= pageTop && center <= pageTop + p.height + PAGE_GAP;
+  })
+  return page ? page.id : 1
+})
 
 const retry = () => { if (props.src) loadPdf(props.src) }
 
@@ -345,5 +306,5 @@ defineExpose({ highlightBlock })
 .custom-scrollbar::-webkit-scrollbar { width: 8px; }
 .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
 .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; border: 2px solid transparent; background-clip: content-box; }
-.custom-scrollbar::-webkit-scrollbar-thumb:hover { background-color: #94a3b8; }
+.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
 </style>
