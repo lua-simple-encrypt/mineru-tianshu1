@@ -62,16 +62,16 @@
               <div
                 v-for="block in layoutDataMap[page.index]"
                 :key="block.id"
-                class="absolute cursor-pointer pointer-events-auto hover:bg-blue-600/10 hover:border-blue-500 border border-transparent transition-colors rounded-[1px]"
+                class="absolute cursor-pointer pointer-events-auto hover:bg-blue-600/15 hover:border hover:border-blue-500 transition-colors rounded-[2px]"
                 :style="getBlockStyle(block.bbox)"
-                @click.stop="emit('block-click', block)"
-                :title="`跳转到解析内容 (ID: ${block.id})`"
+                @click.stop="$emit('block-click', block)"
+                :title="`定位到文本 (ID: ${block.id})`"
               ></div>
             </div>
 
             <div 
               v-if="highlight && highlight.pageIndex === page.index"
-              class="absolute z-30 border-2 border-red-500 bg-red-500/20 animate-pulse pointer-events-none box-border rounded-[2px] shadow-[0_0_8px_rgba(239,68,68,0.5)]"
+              class="absolute z-30 border-[3px] border-red-500 bg-red-500/20 animate-pulse pointer-events-none box-border rounded-[2px] shadow-[0_0_12px_rgba(239,68,68,0.6)]"
               :style="getBlockStyle(highlight.bbox)"
             ></div>
 
@@ -95,7 +95,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker
 
 const props = defineProps<{
   src: string | null
-  layoutData?: any[] // 后端返回的扁平化 JSON
+  layoutData?: any[]
 }>()
 
 const emit = defineEmits<{
@@ -123,9 +123,7 @@ const totalPages = ref(0)
 const scale = ref(1.5)
 let lastWidth = 0 
 
-// 控制外部传入的闪烁红框
 const highlight = ref<{ pageIndex: number; bbox: any[] } | null>(null)
-
 const loading = ref(false)
 const processing = ref(false)
 const progress = ref(0)
@@ -133,12 +131,12 @@ const error = ref<string | null>(null)
 
 const renderTasks = new Map<number, pdfjsLib.RenderTask>()
 const renderedPages = new Set<number>()
-
 const PAGE_GAP = 16 
 
 const currentPage = computed(() => {
   if (!pagesMetaData.value.length) return 0
-  const center = scrollTop.value + (containerHeight.value / 2)
+  // 获取视口偏上部分的页面作为当前阅读页，利于精确同步
+  const center = scrollTop.value + (containerHeight.value / 3)
   const page = pagesMetaData.value.find(p => center >= p.top && center <= (p.top + p.height + PAGE_GAP))
   return page ? page.index : 1
 })
@@ -156,10 +154,8 @@ const layoutDataMap = computed(() => {
 
 const visiblePages = computed(() => {
   if (pagesMetaData.value.length === 0) return []
-  
   const startY = scrollTop.value - containerHeight.value * 1.5
   const endY = scrollTop.value + containerHeight.value * 2.5 
-  
   const result = []
   
   for (const page of pagesMetaData.value) {
@@ -178,7 +174,6 @@ const visiblePages = computed(() => {
 watch(visiblePages, (newPages, oldPages) => {
   if (!oldPages) return;
   const newIndices = new Set(newPages.map(p => p.index));
-  
   oldPages.forEach(p => {
     if (!newIndices.has(p.index)) {
       renderedPages.delete(p.index);
@@ -197,7 +192,6 @@ watch(() => props.src, (val) => {
 
 const loadPdf = async (url: string) => {
   if (!url) return
-  
   if (pdfDoc.value) {
     pdfDoc.value.destroy()
     pdfDoc.value = null
@@ -237,13 +231,16 @@ const loadPdf = async (url: string) => {
   }
 }
 
-const initLayout = async () => {
+// 🚀 [修复白屏] 增加重试机制，确保容器被撑开后才执行算力
+const initLayout = async (retryCount = 0) => {
   if (!pdfDoc.value || !containerRef.value) return
   
   const containerW = containerRef.value.clientWidth
-  // 解决初始白屏：宽度为 0 时延时等待 DOM
+  // 容器宽度为0说明DOM尚未布局，最多重试 20 次 (约2秒)
   if (containerW <= 0) {
-    setTimeout(() => { if (pdfDoc.value) initLayout() }, 100)
+    if (retryCount < 20) {
+      setTimeout(() => initLayout(retryCount + 1), 100)
+    }
     return
   }
 
@@ -323,18 +320,13 @@ const renderPage = async (canvas: HTMLCanvasElement | null, pageMeta: any) => {
   }
 }
 
-// 🚀 [核心修复] 完美兼容 PaddleOCR 的多种坐标系格式
 const getBlockStyle = (bbox: any) => {
   if (!bbox || !Array.isArray(bbox) || bbox.length === 0) return { display: 'none' }
-  
   let x0 = 0, y0 = 0, x1 = 0, y1 = 0;
   
-  // 格式 1: [x_min, y_min, x_max, y_max] (一般为版面分析 layout_bbox)
   if (bbox.length === 4 && typeof bbox[0] === 'number') {
     [x0, y0, x1, y1] = bbox as number[];
-  } 
-  // 格式 2: [[x1, y1], [x2, y2], [x3, y3], [x4, y4]] (一般为文本块 OCR 多边形坐标)
-  else if (bbox.length === 4 && Array.isArray(bbox[0])) {
+  } else if (bbox.length === 4 && Array.isArray(bbox[0])) {
     const xs = bbox.map((p: number[]) => p[0]);
     const ys = bbox.map((p: number[]) => p[1]);
     x0 = Math.min(...xs);
@@ -367,38 +359,37 @@ const onScroll = (e: Event) => {
   })
 }
 
-// 暴露 API 1：同步百分比滚动
-const scrollToPercentage = (percentage: number) => {
-  if (!containerRef.value) return
-  const targetTop = percentage * (containerRef.value.scrollHeight - containerRef.value.clientHeight)
-  containerRef.value.scrollTo({ top: targetTop, behavior: 'auto' }) 
-}
-
-// 暴露 API 2：高亮并滚动到 PDF 的红框区域
+// 暴露 API：带有红色闪烁框的平滑跳转
 const highlightBlock = (pageIndex: number, bbox: any) => {
   if (!containerRef.value) return
   
   highlight.value = { pageIndex, bbox }
-  
   const pageMeta = pagesMetaData.value.find(p => p.index === pageIndex)
+  
   if (pageMeta) {
-    // 兼容取 Y 轴坐标用于定位
     let blockY = 0;
     if (bbox && bbox.length === 4) {
        blockY = Array.isArray(bbox[0]) ? Math.min(...bbox.map((p:any) => p[1])) : bbox[1];
     }
+    const targetScroll = pageMeta.top + (blockY * scale.value) - (containerHeight.value / 3)
+    containerRef.value.scrollTo({ top: Math.max(0, targetScroll), behavior: 'smooth' })
     
-    const s = scale.value
-    // 计算滚动高度，并放在视口偏上的位置
-    const targetScroll = pageMeta.top + (blockY * s) - (containerHeight.value / 3)
-    
-    containerRef.value.scrollTo({
-      top: Math.max(0, targetScroll),
-      behavior: 'smooth'
-    })
-    
-    // 3秒后自动清除红色脉冲高亮
     setTimeout(() => { highlight.value = null }, 3000)
+  }
+}
+
+// 🚀 [新功能] 暴露 API：静默对齐跳转 (解决双向滚动错乱的问题)
+const silentScrollToBlock = (pageIndex: number, bbox: any) => {
+  if (!containerRef.value) return
+  const pageMeta = pagesMetaData.value.find(p => p.index === pageIndex)
+  if (pageMeta) {
+    let blockY = 0;
+    if (bbox && bbox.length === 4) {
+       blockY = Array.isArray(bbox[0]) ? Math.min(...bbox.map((p:any) => p[1])) : bbox[1];
+    }
+    // 抵消一点顶部留白
+    const targetScroll = pageMeta.top + (blockY * scale.value) - 40 
+    containerRef.value.scrollTo({ top: Math.max(0, targetScroll), behavior: 'auto' }) // auto 不带动画，防止闪烁
   }
 }
 
@@ -411,14 +402,16 @@ onMounted(() => {
     const handleResize = debounce(() => {
       if (!containerRef.value) return
       const currentWidth = containerRef.value.clientWidth
-      if (currentWidth > 0 && Math.abs(currentWidth - lastWidth) > 1) {
-        if (!processing.value && pdfDoc.value) {
-           initLayout()
-        }
+      
+      // 如果之前宽度是 0，说明刚从白屏恢复，触发渲染
+      if (currentWidth > 0 && pagesMetaData.value.length === 0 && pdfDoc.value) {
+         initLayout()
+      } else if (currentWidth > 0 && Math.abs(currentWidth - lastWidth) > 1) {
+        if (!processing.value && pdfDoc.value) initLayout()
       } else if (currentWidth > 0) {
         containerHeight.value = containerRef.value.clientHeight
       }
-    }, 200)
+    }, 100)
 
     resizeObserver = new ResizeObserver(handleResize)
     resizeObserver.observe(containerRef.value)
@@ -436,8 +429,8 @@ onUnmounted(() => {
   renderTasks.forEach(t => t.cancel())
 })
 
-// 将内部方法抛出给 TaskDetail 组件调用
-defineExpose({ scrollToPercentage, highlightBlock })
+// 统一导出供父组件使用
+defineExpose({ highlightBlock, silentScrollToBlock, currentPage })
 </script>
 
 <style scoped>
