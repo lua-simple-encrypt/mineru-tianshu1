@@ -56,6 +56,9 @@
             <div class="text-red-600 bg-white p-4 rounded-lg border border-red-200 font-mono text-sm text-left overflow-auto max-h-64 break-all shadow-sm">{{ task.error_message || '未知错误' }}</div>
          </div>
       </div>
+      <div v-else-if="task.result_path === 'CLEARED'" class="max-w-3xl mx-auto mt-16 px-4">
+        <div class="card p-12 text-center border-gray-200 bg-gray-50/30 shadow-sm"><div class="flex justify-center mb-6"><Eraser class="w-12 h-12 text-gray-400" /></div><h2 class="text-xl font-semibold text-gray-900 mb-2">{{ $t('task.filesCleared') }}</h2></div>
+      </div>
 
       <div v-else class="h-full w-full flex flex-row gap-4">
         
@@ -75,7 +78,7 @@
         </div>
 
         <div v-if="showMarkdown" :class="['card p-0 flex flex-col h-full shadow-sm border border-gray-200 min-w-0 transition-all duration-300', layoutMode === 'split' ? 'flex-1 basis-1/2' : 'flex-1 basis-full']">
-          <div class="bg-gray-50 px-3 py-2 border-b border-gray-200 flex justify-between items-center shrink-0">
+          <div class="bg-gray-50 px-3 py-2 border-b border-gray-200 flex justify-between items-center shrink-0 z-10">
             <div class="flex items-center bg-gray-200 rounded p-0.5">
               <button @click="activeTab = 'markdown'" :class="['tab-btn', activeTab==='markdown' ? 'active' : '']">完整文档</button>
               <button @click="activeTab = 'sync'" :class="['tab-btn flex items-center gap-1', activeTab==='sync' ? 'active' : '']">
@@ -89,43 +92,46 @@
             </button>
           </div>
           
-          <div class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden bg-white relative custom-scrollbar px-6 pt-6 pb-12 scroll-smooth flex flex-col">
-            
-            <div v-if="activeTab === 'markdown'" class="w-full flex-1">
-               <MarkdownViewer :content="task.data?.content || ''" />
-            </div>
-
-            <div v-else-if="activeTab === 'sync'" class="w-full max-w-[800px] mx-auto flex-1">
-              <div v-if="layoutData.length > 0" class="flex flex-col gap-3">
-                <div class="text-xs text-gray-500 bg-blue-50 p-2.5 rounded-lg mb-3 border border-blue-100">
-                  💡 此视图用于与左侧 PDF 进行行级别的双向点击定位。如果需要阅读带有精美排版和公式的全局文档，请切换至上方【完整文档】标签。
-                </div>
-                
-                <div 
-                  v-for="block in layoutData" 
-                  :key="block.id"
-                  :id="`md-block-${block.id}`"
-                  @click="handleMarkdownBlockClick(block)"
-                  :class="['p-3 rounded-lg transition-all cursor-pointer border break-words w-full text-[14px] leading-relaxed', 
-                           activeBlockId === block.id 
-                             ? 'bg-yellow-50 border-yellow-400 shadow-sm ring-2 ring-yellow-200' 
-                             : 'bg-white border-gray-100 hover:bg-gray-50 hover:border-gray-300']"
-                  title="点击在左侧 PDF 中定位"
-                >
-                  <div v-if="block.type === 'image'" class="text-blue-500 text-xs font-semibold mb-1 flex items-center gap-1 select-none"><Image class="w-3.5 h-3.5"/> [提取图片]</div>
-                  <div v-else-if="block.type === 'table'" class="text-green-500 text-xs font-semibold mb-1 flex items-center gap-1 select-none"><Table class="w-3.5 h-3.5"/> [提取表格]</div>
-                  <div v-else-if="block.type === 'doc_title'" class="text-lg font-bold text-gray-900 mb-1 border-b pb-1">{{ block.text }}</div>
-                  
-                  <div v-if="block.type !== 'doc_title'" class="whitespace-pre-wrap font-mono text-gray-600">{{ block.text }}</div>
-                </div>
+          <div class="flex-1 relative min-h-0 bg-white">
+            <div 
+              ref="markdownContainerRef" 
+              class="absolute inset-0 overflow-y-auto overflow-x-hidden custom-scrollbar scroll-smooth p-6 pb-20"
+            >
+              <div v-show="activeTab === 'markdown'" class="w-full">
+                 <MarkdownViewer :content="task.data?.content || ''" />
               </div>
-              <div v-else class="text-gray-500 text-sm italic text-center mt-10">未能提取到结构化版面数据。</div>
-            </div>
 
-            <div v-else class="w-full flex-1">
-               <JsonViewer :data="task.data?.json_content || {}" />
+              <div v-show="activeTab === 'sync'" class="w-full max-w-[800px] mx-auto">
+                <div v-if="layoutData.length > 0" class="flex flex-col gap-3">
+                  <div class="text-xs text-gray-500 bg-blue-50 p-2.5 rounded-lg mb-3 border border-blue-100">
+                    💡 此视图用于与左侧 PDF 进行行级别的双向点击定位。如果需要阅读带有精美排版和公式的全局文档，请切换至上方【完整文档】标签。
+                  </div>
+                  
+                  <div 
+                    v-for="block in layoutData" 
+                    :key="block.id"
+                    :id="`md-block-${block.id}`"
+                    @click="handleMarkdownBlockClick(block)"
+                    :class="['p-3 rounded-lg transition-all cursor-pointer border break-words w-full text-[14px] leading-relaxed', 
+                             activeBlockId === block.id 
+                               ? 'bg-yellow-50 border-yellow-400 shadow-sm ring-2 ring-yellow-200' 
+                               : 'bg-white border-gray-100 hover:bg-gray-50 hover:border-gray-300']"
+                    title="点击在左侧 PDF 中定位"
+                  >
+                    <div v-if="block.type === 'image'" class="text-blue-500 text-xs font-semibold mb-1 flex items-center gap-1 select-none"><Image class="w-3.5 h-3.5"/> [提取图片]</div>
+                    <div v-else-if="block.type === 'table'" class="text-green-500 text-xs font-semibold mb-1 flex items-center gap-1 select-none"><Table class="w-3.5 h-3.5"/> [提取表格]</div>
+                    <div v-else-if="block.type === 'doc_title'" class="text-lg font-bold text-gray-900 mb-1 border-b pb-1">{{ block.text }}</div>
+                    
+                    <div v-if="block.type !== 'doc_title'" class="whitespace-pre-wrap font-mono text-gray-600">{{ block.text }}</div>
+                  </div>
+                </div>
+                <div v-else class="text-gray-500 text-sm italic text-center mt-10">未能提取到结构化版面数据。</div>
+              </div>
+
+              <div v-show="activeTab === 'json'" class="w-full">
+                <JsonViewer :data="task.data?.json_content || {}" />
+              </div>
             </div>
-            
           </div>
         </div>
 
@@ -139,7 +145,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { useI18n } from 'vue-i18n'
 import { useTaskStore } from '@/stores'
 import { ArrowLeft, AlertCircle, RefreshCw, FileText, Columns, Download, RotateCw, Eraser, Pause, Image, Table, Trash2 } from 'lucide-vue-next'
 import StatusBadge from '@/components/StatusBadge.vue'
@@ -149,7 +154,6 @@ import JsonViewer from '@/components/JsonViewer.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import VirtualPdfViewer from '@/components/VirtualPdfViewer.vue'
 
-const { t } = useI18n()
 const router = useRouter()
 const route = useRoute()
 const taskStore = useTaskStore()
@@ -165,11 +169,15 @@ const layoutMode = ref<'split' | 'single'>('split')
 
 const activeBlockId = ref<string | number | null>(null) 
 const pdfViewerRef = ref<InstanceType<typeof VirtualPdfViewer> | null>(null)
+const markdownContainerRef = ref<HTMLElement | null>(null)
 
 const pdfUrl = computed(() => task.value?.data?.pdf_path ? `/api/v1/files/output/${task.value.data.pdf_path}` : null)
 const showPdf = computed(() => layoutMode.value === 'split' || (layoutMode.value === 'single' && pdfUrl.value))
 const showMarkdown = computed(() => layoutMode.value === 'split' || layoutMode.value !== 'single')
 
+// =======================================================
+// 🚀 数据格式化兼容：提取 _page_width
+// =======================================================
 const layoutData = computed(() => {
   const jsonContent = task.value?.data?.json_content
   if (!jsonContent) return []
@@ -201,6 +209,10 @@ const layoutData = computed(() => {
   }))
 })
 
+// =======================================================
+// 🎯 精准双向定位点击
+// =======================================================
+
 const handlePdfBlockClick = (block: any) => {
   if (!block) return
   activeBlockId.value = block.id 
@@ -211,7 +223,14 @@ const handlePdfBlockClick = (block: any) => {
 
   nextTick(() => {
     const el = document.getElementById(`md-block-${block.id}`)
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    if (el && markdownContainerRef.value) {
+      // 算出该元素相对于滚动容器的顶部高度偏移量
+      const topPos = el.offsetTop - 24;
+      markdownContainerRef.value.scrollTo({
+        top: Math.max(0, topPos),
+        behavior: 'smooth'
+      });
+    }
   })
 }
 
