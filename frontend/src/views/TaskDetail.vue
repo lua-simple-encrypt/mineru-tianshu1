@@ -20,6 +20,10 @@
               <Eraser :class="{'animate-pulse': actionLoading && currentAction === 'clearCache'}" class="w-4 h-4 mr-1.5" />
               <span>清理缓存</span>
             </button>
+            <button @click="initiateAction('delete')" :disabled="actionLoading" class="btn btn-white text-red-600 border-gray-200 hover:bg-red-50 btn-sm flex items-center shadow-sm transition-all disabled:opacity-50" title="彻底删除任务及文件">
+              <Trash2 class="w-4 h-4 mr-1.5" />
+              <span class="hidden sm:inline">彻底删除</span>
+            </button>
         </template>
 
         <div v-if="task?.status === 'completed' && pdfUrl && task?.result_path !== 'CLEARED'" class="flex items-center bg-gray-100 rounded-lg p-1">
@@ -91,8 +95,8 @@
                <MarkdownViewer :content="task.data?.content || ''" />
             </div>
 
-            <div v-else-if="activeTab === 'sync'" class="w-full">
-              <div v-if="layoutData.length > 0" class="flex flex-col gap-2">
+            <div v-else-if="activeTab === 'sync'" class="w-full max-w-[800px] mx-auto">
+              <div v-if="layoutData.length > 0" class="flex flex-col gap-3">
                 <div class="text-xs text-gray-500 bg-blue-50 p-2.5 rounded-lg mb-3 border border-blue-100">
                   💡 此视图用于与左侧 PDF 进行行级别的双向点击定位。如果需要阅读带有精美排版和公式的全局文档，请切换至上方【完整文档】标签。
                 </div>
@@ -104,11 +108,12 @@
                   @click="handleMarkdownBlockClick(block)"
                   :class="['p-3 rounded-lg transition-all cursor-pointer border break-words w-full text-[14px] leading-relaxed', 
                            activeBlockId === block.id 
-                             ? 'bg-yellow-50 border-yellow-400 shadow-sm ring-1 ring-yellow-300' 
+                             ? 'bg-yellow-50 border-yellow-400 shadow-sm ring-2 ring-yellow-200' 
                              : 'bg-white border-gray-100 hover:bg-gray-50 hover:border-gray-300']"
+                  title="点击在左侧 PDF 中定位"
                 >
-                  <div v-if="block.type === 'image'" class="text-blue-500 text-xs font-semibold mb-1 flex items-center gap-1 select-none"><Image class="w-3.5 h-3.5"/> [提取的图片]</div>
-                  <div v-else-if="block.type === 'table'" class="text-green-500 text-xs font-semibold mb-1 flex items-center gap-1 select-none"><Table class="w-3.5 h-3.5"/> [提取的表格]</div>
+                  <div v-if="block.type === 'image'" class="text-blue-500 text-xs font-semibold mb-1 flex items-center gap-1 select-none"><Image class="w-3.5 h-3.5"/> [提取图片]</div>
+                  <div v-else-if="block.type === 'table'" class="text-green-500 text-xs font-semibold mb-1 flex items-center gap-1 select-none"><Table class="w-3.5 h-3.5"/> [提取表格]</div>
                   <div v-else-if="block.type === 'doc_title'" class="text-lg font-bold text-gray-900 mb-1 border-b pb-1">{{ block.text }}</div>
                   
                   <div v-if="block.type !== 'doc_title'" class="whitespace-pre-wrap font-mono text-gray-600">{{ block.text }}</div>
@@ -130,9 +135,10 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { useTaskStore } from '@/stores'
-import { ArrowLeft, AlertCircle, RefreshCw, FileText, Columns, Download, RotateCw, Eraser, Pause, Image, Table } from 'lucide-vue-next'
+import { ArrowLeft, AlertCircle, RefreshCw, FileText, Columns, Download, RotateCw, Eraser, Pause, Image, Table, Trash2 } from 'lucide-vue-next'
 import StatusBadge from '@/components/StatusBadge.vue'
 import LoadingSpinner from '@/components/LoadingSpinner.vue'
 import MarkdownViewer from '@/components/MarkdownViewer.vue'
@@ -140,6 +146,8 @@ import JsonViewer from '@/components/JsonViewer.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import VirtualPdfViewer from '@/components/VirtualPdfViewer.vue'
 
+const { t } = useI18n()
+const router = useRouter()
 const route = useRoute()
 const taskStore = useTaskStore()
 
@@ -189,19 +197,21 @@ const layoutData = computed(() => {
       bbox: b.bbox ?? b.block_bbox ?? b.layout_bbox ?? [], 
       text: b.text ?? b.block_content ?? '',               
       type: b.type ?? b.block_label ?? 'text',
-      _page_width: b._page_width || 595.28 // 提取该页的绝对原生宽度，下传给画布换算
+      _page_width: b._page_width || 595.28 // 提取该页的绝对原生宽度，下传给画布换算比例
   }))
 })
 
+
 // =======================================================
-// 🎯 精准双向定位点击
+// 🎯 精准双向定位点击 (剥离了所有同步滚动的逻辑)
 // =======================================================
 
+// 1. 点击左侧 PDF 上的透明热区 -> 右侧对应的 Markdown 亮起黄框，并滚入视野
 const handlePdfBlockClick = (block: any) => {
   if (!block) return
   activeBlockId.value = block.id 
   
-  // 如果不在定位视图，自动帮忙切过去
+  // 必须确保在定位视图
   if (activeTab.value !== 'sync') {
     activeTab.value = 'sync';
   }
@@ -212,6 +222,7 @@ const handlePdfBlockClick = (block: any) => {
   })
 }
 
+// 2. 点击右侧 Markdown 段落 -> 呼叫左侧 PDF 引擎跳转到该页并闪烁红框
 const handleMarkdownBlockClick = (block: any) => {
   if (!block) return
   activeBlockId.value = block.id 
@@ -222,13 +233,16 @@ const handleMarkdownBlockClick = (block: any) => {
   }
 }
 
+// =======================================================
+// 生命周期与基础逻辑
+// =======================================================
 const setMode = (mode: 'split' | 'single') => { layoutMode.value = mode }
 let stopPolling: (() => void) | null = null
 
 async function refreshTask() {
   loading.value = true; error.value = '';
   try { await taskStore.fetchTaskStatus(taskId.value, false, 'both') } 
-  catch (err: any) { error.value = err.message || '加载失败' } 
+  catch (err: any) { error.value = err.message || t('task.loadFailed') } 
   finally { loading.value = false }
 }
 
@@ -254,14 +268,16 @@ const showConfirm = ref(false)
 const confirmTitle = ref('')
 const confirmMessage = ref('')
 const confirmType = ref<'info' | 'warning' | 'danger'>('info')
-const currentAction = ref<'retry' | 'clearCache' | null>(null)
+const currentAction = ref<'retry' | 'clearCache' | 'delete' | null>(null)
 
-function initiateAction(action: 'retry' | 'clearCache') {
+function initiateAction(action: 'retry' | 'clearCache' | 'delete') {
   currentAction.value = action
   if (action === 'retry') {
     confirmTitle.value = '重试任务'; confirmMessage.value = '确定重试吗？'; confirmType.value = 'info'
   } else if (action === 'clearCache') {
-    confirmTitle.value = '清理缓存'; confirmMessage.value = '确定清理吗？'; confirmType.value = 'danger'
+    confirmTitle.value = '清理缓存'; confirmMessage.value = '确定清理吗？'; confirmType.value = 'warning'
+  } else if (action === 'delete') {
+    confirmTitle.value = '删除任务'; confirmMessage.value = '彻底删除该任务及文件？不可恢复。'; confirmType.value = 'danger'
   }
   showConfirm.value = true
 }
@@ -274,6 +290,8 @@ async function executeAction() {
       await taskStore.retryTask(taskId.value); await refreshTask(); startPolling();
     } else if (currentAction.value === 'clearCache') {
       await taskStore.clearTaskCache(taskId.value); await refreshTask();
+    } else if (currentAction.value === 'delete') {
+      await taskStore.deleteTask(taskId.value); router.back();
     }
   } catch (err: any) { error.value = err.message || 'Action failed' } 
   finally { actionLoading.value = false; currentAction.value = null }
