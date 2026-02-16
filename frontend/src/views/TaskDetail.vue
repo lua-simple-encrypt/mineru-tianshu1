@@ -57,7 +57,7 @@
         
         <div v-if="showPdf" :class="['card p-0 flex flex-col h-full border border-gray-200 relative shadow-sm min-w-0 transition-all duration-300', layoutMode === 'split' ? 'flex-1 basis-1/2' : 'flex-1 basis-full']">
           <div class="bg-gray-50 px-3 py-2 border-b border-gray-200 flex justify-between items-center shrink-0">
-            <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">源文档预览 (点击蓝色热区对应右侧)</span>
+            <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">源文档预览 (悬浮出现互动热区)</span>
           </div>
           
           <div class="flex-1 relative overflow-hidden min-h-0 bg-gray-200">
@@ -73,38 +73,50 @@
         <div v-if="showMarkdown" :class="['card p-0 flex flex-col h-full shadow-sm border border-gray-200 min-w-0 transition-all duration-300', layoutMode === 'split' ? 'flex-1 basis-1/2' : 'flex-1 basis-full']">
           <div class="bg-gray-50 px-3 py-2 border-b border-gray-200 flex justify-between items-center shrink-0">
             <div class="flex items-center bg-gray-200 rounded p-0.5">
-              <button @click="activeTab = 'markdown'" :class="['tab-btn', activeTab==='markdown' ? 'active' : '']">结构化视图</button>
-              <button @click="activeTab = 'json'" :class="['tab-btn', activeTab==='json' ? 'active' : '']">底层JSON</button>
+              <button @click="activeTab = 'markdown'" :class="['tab-btn', activeTab==='markdown' ? 'active' : '']">完整文档</button>
+              <button @click="activeTab = 'sync'" :class="['tab-btn flex items-center gap-1', activeTab==='sync' ? 'active' : '']">
+                双向定位
+                <span v-if="activeBlockId" class="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
+              </button>
+              <button @click="activeTab = 'json'" :class="['tab-btn', activeTab==='json' ? 'active' : '']">JSON</button>
             </div>
             <button @click="downloadMarkdown" class="text-xs text-primary-600 hover:underline flex items-center">
-              <Download class="w-3 h-3 mr-1"/> 下载 MD
+              <Download class="w-3 h-3 mr-1"/> 下载文件
             </button>
           </div>
           
           <div class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden bg-white relative custom-scrollbar p-6 scroll-smooth">
+            
             <div v-if="activeTab === 'markdown'" class="w-full">
-              <div v-if="layoutData.length > 0" class="prose prose-sm max-w-none text-gray-700 break-words">
+               <MarkdownViewer :content="task.data?.content || ''" />
+            </div>
+
+            <div v-else-if="activeTab === 'sync'" class="w-full">
+              <div v-if="layoutData.length > 0" class="flex flex-col gap-2">
+                <div class="text-xs text-gray-500 bg-blue-50 p-2.5 rounded-lg mb-3 border border-blue-100">
+                  💡 此视图用于与左侧 PDF 进行行级别的双向点击定位。如果需要阅读带有精美排版和公式的全局文档，请切换至上方【完整文档】标签。
+                </div>
+                
                 <div 
                   v-for="block in layoutData" 
                   :key="block.id"
                   :id="`md-block-${block.id}`"
                   @click="handleMarkdownBlockClick(block)"
-                  :class="['mb-4 p-3 rounded-md transition-all cursor-pointer border break-words w-full', 
+                  :class="['p-3 rounded-lg transition-all cursor-pointer border break-words w-full text-[14px] leading-relaxed', 
                            activeBlockId === block.id 
-                             ? 'bg-yellow-50 border-yellow-400 shadow-md ring-2 ring-yellow-200' 
-                             : 'border-transparent hover:bg-gray-50 hover:border-gray-200']"
-                  title="点击在左侧 PDF 中定位"
+                             ? 'bg-yellow-50 border-yellow-400 shadow-sm ring-1 ring-yellow-300' 
+                             : 'bg-white border-gray-100 hover:bg-gray-50 hover:border-gray-300']"
                 >
-                  <div v-if="block.type === 'image'" class="text-gray-400 text-xs italic mb-1 flex items-center gap-1 select-none"><Image class="w-3 h-3"/> [图片内容]</div>
-                  <div v-else-if="block.type === 'table'" class="text-gray-400 text-xs italic mb-1 flex items-center gap-1 select-none"><Table class="w-3 h-3"/> [表格内容]</div>
+                  <div v-if="block.type === 'image'" class="text-blue-500 text-xs font-semibold mb-1 flex items-center gap-1 select-none"><Image class="w-3.5 h-3.5"/> [提取的图片]</div>
+                  <div v-else-if="block.type === 'table'" class="text-green-500 text-xs font-semibold mb-1 flex items-center gap-1 select-none"><Table class="w-3.5 h-3.5"/> [提取的表格]</div>
+                  <div v-else-if="block.type === 'doc_title'" class="text-lg font-bold text-gray-900 mb-1 border-b pb-1">{{ block.text }}</div>
                   
-                  <div class="whitespace-pre-wrap leading-relaxed max-w-full overflow-hidden">{{ block.text }}</div>
+                  <div v-if="block.type !== 'doc_title'" class="whitespace-pre-wrap font-mono text-gray-600">{{ block.text }}</div>
                 </div>
               </div>
-              <div v-else class="text-gray-500 text-sm italic text-center mt-10">
-                未能提取到结构化版面数据，请查看 JSON 面板或原文件。
-              </div>
+              <div v-else class="text-gray-500 text-sm italic text-center mt-10">未能提取到结构化版面数据。</div>
             </div>
+
             <div v-else class="h-full w-full"><JsonViewer :data="task.data?.json_content || {}" /></div>
           </div>
         </div>
@@ -117,12 +129,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { useTaskStore } from '@/stores'
 import { ArrowLeft, AlertCircle, RefreshCw, FileText, Columns, Download, RotateCw, Eraser, Pause, Image, Table } from 'lucide-vue-next'
 import StatusBadge from '@/components/StatusBadge.vue'
 import LoadingSpinner from '@/components/LoadingSpinner.vue'
+import MarkdownViewer from '@/components/MarkdownViewer.vue'
 import JsonViewer from '@/components/JsonViewer.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import VirtualPdfViewer from '@/components/VirtualPdfViewer.vue'
@@ -136,12 +149,10 @@ const loading = ref(false)
 const actionLoading = ref(false)
 const error = ref('')
 
-const activeTab = ref<'markdown' | 'json'>('markdown')
+const activeTab = ref<'markdown' | 'sync' | 'json'>('markdown')
 const layoutMode = ref<'split' | 'single'>('split')
 
-// 记录当前被点击激活的模块 ID
 const activeBlockId = ref<string | number | null>(null) 
-
 const pdfViewerRef = ref<InstanceType<typeof VirtualPdfViewer> | null>(null)
 
 const pdfUrl = computed(() => task.value?.data?.pdf_path ? `/api/v1/files/output/${task.value.data.pdf_path}` : null)
@@ -149,7 +160,7 @@ const showPdf = computed(() => layoutMode.value === 'split' || (layoutMode.value
 const showMarkdown = computed(() => layoutMode.value === 'split' || layoutMode.value !== 'single')
 
 // =======================================================
-// 🚀 [核心修复] 超强兼容数据格式化 (适配所有Paddle/MinerU格式)
+// 🚀 [核心修复] 超强兼容数据格式化，提取 _page_width 供坐标转换
 // =======================================================
 const layoutData = computed(() => {
   const jsonContent = task.value?.data?.json_content
@@ -157,66 +168,60 @@ const layoutData = computed(() => {
 
   let flatBlocks: any[] = []
 
-  // 1. 新版已扁平化数据
   if (Array.isArray(jsonContent)) {
       flatBlocks = jsonContent
   } 
-  // 2. 包含 pages 数组 (常规 MinerU 格式)
   else if (jsonContent.pages && Array.isArray(jsonContent.pages)) {
       flatBlocks = jsonContent.pages.flatMap((p: any) => {
-          // 兼容不同版本的 block 数组名
           const blocks = p.blocks || p.parsing_res_list || [];
           const pageIdx = p.page_index ?? p.page_id ?? 0;
-          return blocks.map((b: any, i: number) => ({ ...b, _page_idx: pageIdx, _idx: i }))
+          return blocks.map((b: any, i: number) => ({ ...b, _page_idx: pageIdx, _idx: i, _page_width: p.width }))
       })
   }
-  // 3. 直接是单页对象 (根据你提供的 JSON 样例)
   else if (jsonContent.parsing_res_list) {
       const pageIdx = jsonContent.page_index ?? 0;
-      flatBlocks = jsonContent.parsing_res_list.map((b: any, i: number) => ({ ...b, _page_idx: pageIdx, _idx: i }))
+      flatBlocks = jsonContent.parsing_res_list.map((b: any, i: number) => ({ ...b, _page_idx: pageIdx, _idx: i, _page_width: jsonContent.width }))
   }
 
-  // 统一转换属性名，适配前端渲染
   return flatBlocks.map(b => ({
       id: b.id ?? b.block_id ?? `${b._page_idx}-${b._idx}`,
       page_idx: b.page_idx ?? b._page_idx ?? 0,
-      bbox: b.bbox ?? b.block_bbox ?? b.layout_bbox ?? [], // 完美兼容 block_bbox
-      text: b.text ?? b.block_content ?? '',               // 完美兼容 block_content
-      type: b.type ?? b.block_label ?? 'text'              // 完美兼容 block_label
+      bbox: b.bbox ?? b.block_bbox ?? b.layout_bbox ?? [], 
+      text: b.text ?? b.block_content ?? '',               
+      type: b.type ?? b.block_label ?? 'text',
+      _page_width: b._page_width || 595.28 // 提取该页的绝对原生宽度，下传给画布换算
   }))
 })
-
 
 // =======================================================
 // 🎯 精准双向定位点击
 // =======================================================
 
-// 1. 点击左侧 PDF 上的透明热区 -> 右侧对应的 Markdown 亮起黄框，并滚入视野
 const handlePdfBlockClick = (block: any) => {
   if (!block) return
   activeBlockId.value = block.id 
   
-  const el = document.getElementById(`md-block-${block.id}`)
-  if (el) {
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  // 如果不在定位视图，自动帮忙切过去
+  if (activeTab.value !== 'sync') {
+    activeTab.value = 'sync';
   }
+
+  nextTick(() => {
+    const el = document.getElementById(`md-block-${block.id}`)
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  })
 }
 
-// 2. 点击右侧 Markdown 段落 -> 呼叫左侧 PDF 引擎跳转到该页并闪烁红框
 const handleMarkdownBlockClick = (block: any) => {
   if (!block) return
   activeBlockId.value = block.id 
   
   if (pdfViewerRef.value && typeof pdfViewerRef.value.highlightBlock === 'function') {
-    // 兼容不同的 page 索引起点 (通常后端为0，PDF为1)
     const pageIndex = (typeof block.page_idx === 'number' ? block.page_idx : block.page_id) + 1
     pdfViewerRef.value.highlightBlock(pageIndex, block.bbox)
   }
 }
 
-// =======================================================
-// 生命周期与基础逻辑
-// =======================================================
 const setMode = (mode: 'split' | 'single') => { layoutMode.value = mode }
 let stopPolling: (() => void) | null = null
 
@@ -282,10 +287,10 @@ onUnmounted(() => { if (stopPolling) stopPolling() })
 </script>
 
 <style scoped>
-.tab-btn { @apply text-xs px-3 py-1 rounded transition-all text-gray-500 font-medium; }
-.tab-btn.active { @apply bg-white text-gray-900 shadow-sm; }
+.tab-btn { @apply text-xs px-3 py-1.5 rounded transition-all text-gray-500 font-medium whitespace-nowrap; }
+.tab-btn.active { @apply bg-white text-primary-600 shadow-sm border border-gray-100; }
 .custom-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
 .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-.custom-scrollbar::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 4px; border: 2px solid transparent; background-clip: content-box;}
+.custom-scrollbar::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 4px; background-clip: content-box;}
 .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
 </style>
