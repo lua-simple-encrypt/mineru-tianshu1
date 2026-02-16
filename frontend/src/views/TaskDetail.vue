@@ -46,9 +46,9 @@
             </button>
         </template>
 
-        <div v-if="layoutMode === 'split'" class="flex items-center gap-2 mr-2 bg-white px-2 py-1 rounded border border-gray-200">
-          <label class="flex items-center cursor-pointer text-xs text-gray-600 select-none" :title="$t('task.syncScrollDesc')">
-            <input type="checkbox" v-model="syncScroll" class="mr-1.5 rounded text-primary-600 focus:ring-primary-500">
+        <div v-if="layoutMode === 'split'" class="flex items-center gap-2 mr-2 bg-white px-3 py-1.5 rounded-lg border border-gray-200 shadow-sm transition-all hover:border-gray-300">
+          <label class="flex items-center cursor-pointer text-xs font-medium text-gray-700 select-none" :title="$t('task.syncScrollDesc') || '开启后，左右两侧将同步滚动'">
+            <input type="checkbox" v-model="syncScroll" class="mr-2 rounded text-primary-600 focus:ring-primary-500 border-gray-300 transition-colors cursor-pointer">
             <span>{{ $t('task.syncScroll') || '同步滚动' }}</span>
           </label>
         </div>
@@ -70,7 +70,7 @@
           </button>
         </div>
 
-        <button @click="refreshTask()" :disabled="loading" class="btn btn-secondary btn-sm shadow-sm">
+        <button @click="refreshTask()" :disabled="loading" class="btn btn-secondary btn-sm shadow-sm" :title="$t('common.refresh')">
           <RefreshCw :class="{ 'animate-spin': loading }" class="w-4 h-4" />
         </button>
       </div>
@@ -155,9 +155,9 @@
       <div v-else class="h-full flex flex-col">
         <div :class="['flex-1 min-h-0 grid gap-4 h-full', layoutMode === 'split' ? 'grid-cols-2' : 'grid-cols-1']">
           
-          <div v-if="showPdf" class="card p-0 overflow-hidden flex flex-col h-full border-r border-gray-200 relative">
+          <div v-if="showPdf" class="card p-0 overflow-hidden flex flex-col h-full border-r border-gray-200 relative shadow-sm">
             <div class="bg-gray-50 px-3 py-2 border-b border-gray-200 flex justify-between items-center">
-              <span class="text-xs font-semibold text-gray-500 uppercase">{{ $t('task.sourceDocPreview') }}</span>
+              <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">{{ $t('task.sourceDocPreview') }}</span>
               <a v-if="pdfUrl" :href="pdfUrl" target="_blank" class="text-xs text-primary-600 hover:underline flex items-center">
                 {{ $t('common.openInNewWindow') }} <ExternalLink class="w-3 h-3 ml-1"/>
               </a>
@@ -177,7 +177,7 @@
             </div>
           </div>
 
-          <div v-if="showMarkdown" class="card p-0 overflow-hidden flex flex-col h-full">
+          <div v-if="showMarkdown" class="card p-0 overflow-hidden flex flex-col h-full shadow-sm">
             <div class="bg-gray-50 px-3 py-2 border-b border-gray-200 flex justify-between items-center">
               <div class="flex items-center bg-gray-200 rounded p-0.5">
                 <button @click="activeTab = 'markdown'" :class="['tab-btn', activeTab==='markdown' ? 'active' : '']">Markdown</button>
@@ -201,12 +201,15 @@
                     :id="`block-${block.id}`"
                     :data-id="block.id"
                     @click="handleMarkdownClick(block)"
-                    :class="['mb-4 p-2 rounded transition-all cursor-pointer hover:bg-gray-50 border border-transparent', activeBlockId === block.id ? 'bg-yellow-50 border-yellow-200 shadow-sm' : '']"
+                    :class="['mb-4 p-3 rounded-md transition-all cursor-pointer border', 
+                             activeBlockId === block.id 
+                               ? 'bg-yellow-50 border-yellow-300 shadow-sm ring-1 ring-yellow-100' 
+                               : 'border-transparent hover:bg-gray-50 hover:border-gray-200']"
                   >
-                    <div v-if="block.type === 'image'" class="text-gray-400 text-xs italic mb-1 flex items-center gap-1">
+                    <div v-if="block.type === 'image'" class="text-gray-400 text-xs italic mb-1 flex items-center gap-1 select-none">
                       <Image class="w-3 h-3"/> [Image Content]
                     </div>
-                    <div v-else-if="block.type === 'table'" class="text-gray-400 text-xs italic mb-1 flex items-center gap-1">
+                    <div v-else-if="block.type === 'table'" class="text-gray-400 text-xs italic mb-1 flex items-center gap-1 select-none">
                       <Table class="w-3 h-3"/> [Table Content]
                     </div>
                     
@@ -265,35 +268,33 @@ const error = ref('')
 
 const activeTab = ref<'markdown' | 'json'>('markdown')
 const layoutMode = ref<'single' | 'split'>('split')
-const syncScroll = ref(true) // Phase 4: 同步滚动开关
-const activeBlockId = ref<number | null>(null) // Phase 5: 当前激活的 Block
+const syncScroll = ref(true) // 默认开启同步滚动
+const activeBlockId = ref<number | null>(null) 
 
 // Refs
 const pdfViewerRef = ref<InstanceType<typeof VirtualPdfViewer> | null>(null)
 const markdownContainerRef = ref<HTMLElement | null>(null)
 
-// Computed
+// Computed Properties
 const pdfUrl = computed(() => task.value?.data?.pdf_path ? `/api/v1/files/output/${task.value.data.pdf_path}` : null)
 const showPdf = computed(() => layoutMode.value === 'split' || (layoutMode.value === 'single' && pdfUrl.value))
 const showMarkdown = computed(() => layoutMode.value === 'split' || layoutMode.value !== 'single')
 
-// Data Mapping (Phase 5)
-// 将 MinerU 的各种 JSON 格式统一展平为 Block 列表，用于渲染右侧的可交互列表
+// Data Mapping: 将嵌套的 JSON 展平为 Block 列表，便于渲染和索引
 const layoutData = computed(() => {
   const jsonContent = task.value?.data?.json_content
   if (!jsonContent) return []
   
-  // Case 1: 已经是 Block 列表
+  // 如果已经是数组，直接返回
   if (Array.isArray(jsonContent)) return jsonContent 
   
-  // Case 2: 包含 pages 的对象 (MinerU 标准格式)
+  // MinerU 标准格式： { pages: [ { blocks: [...] }, ... ] }
   if (jsonContent.pages && Array.isArray(jsonContent.pages)) {
-      // 提取所有 pages 里的 blocks
       return jsonContent.pages.flatMap((p: any) => {
-          // 如果 block 没有 page_idx，手动补上 (注意 JSON 可能是 0-based 或 1-based，统一处理)
           return (p.blocks || []).map((b: any) => ({
               ...b,
-              // 优先使用 block 自身的 page_idx，其次使用 page 的 page_id
+              // 兼容：优先使用 block 的 page_idx，其次使用 page 的 page_id
+              // 注意：MinerU 输出通常是 0-based，但有时会有不一致，统一转为 0-based
               page_idx: b.page_idx ?? (typeof p.page_id === 'number' ? p.page_id - 1 : 0)
           }))
       })
@@ -301,46 +302,60 @@ const layoutData = computed(() => {
   return []
 })
 
-// --- Phase 4: 同步滚动逻辑 (Bi-directional Sync) ---
+// --- 同步滚动逻辑 (Bi-directional Sync) ---
 let isSyncingLeft = false
 let isSyncingRight = false
+let syncTimeout: any = null
 
-// 左侧滚动 (PDF -> Markdown)
+// 清除同步锁，防抖
+const clearSyncLock = () => {
+    clearTimeout(syncTimeout)
+    syncTimeout = setTimeout(() => {
+        isSyncingLeft = false
+        isSyncingRight = false
+    }, 100) // 100ms 延迟足够处理平滑滚动
+}
+
+// 1. PDF 滚动 -> 带动 Markdown
 const handlePdfScroll = ({ scrollTop, scrollHeight, clientHeight }: any) => {
   if (!syncScroll.value || isSyncingRight || !markdownContainerRef.value) return
   
   isSyncingLeft = true
-  const ratio = scrollTop / (scrollHeight - clientHeight)
+  const maxScroll = scrollHeight - clientHeight
+  if (maxScroll <= 0) return
+  
+  const ratio = scrollTop / maxScroll
   const md = markdownContainerRef.value
   
-  // 简单的百分比映射
-  if (md) {
-      md.scrollTop = ratio * (md.scrollHeight - md.clientHeight)
-  }
+  // 计算右侧对应的 scrollTop
+  md.scrollTop = ratio * (md.scrollHeight - md.clientHeight)
   
-  setTimeout(() => { isSyncingLeft = false }, 50)
+  clearSyncLock()
 }
 
-// 右侧滚动 (Markdown -> PDF)
+// 2. Markdown 滚动 -> 带动 PDF
 const handleMarkdownScroll = (e: Event) => {
   if (!syncScroll.value || isSyncingLeft || !pdfViewerRef.value) return
   
   const target = e.target as HTMLElement
-  const ratio = target.scrollTop / (target.scrollHeight - target.clientHeight)
+  const maxScroll = target.scrollHeight - target.clientHeight
+  if (maxScroll <= 0) return
   
   isSyncingRight = true
+  const ratio = target.scrollTop / maxScroll
+  
+  // 调用子组件方法进行百分比滚动
   pdfViewerRef.value.scrollToPercentage(ratio)
   
-  setTimeout(() => { isSyncingRight = false }, 50)
+  clearSyncLock()
 }
 
-// --- Phase 5: 双向精准定位 (Bi-directional Positioning) ---
+// --- 双向精准定位 (Bi-directional Positioning) ---
 
-// 1. PDF -> Markdown (点击 PDF Block -> 高亮 MD)
+// 1. 点击 PDF 某块 -> 右侧 Markdown 跳转并高亮
 const handleBlockClick = (block: any) => {
   if (!block || !markdownContainerRef.value) return
   
-  // 高亮 Block ID
   activeBlockId.value = block.id
   
   // 查找对应的 DOM 元素
@@ -348,17 +363,18 @@ const handleBlockClick = (block: any) => {
   const el = document.getElementById(elementId)
   
   if (el) {
-    // 暂时关闭同步滚动，防止 scrollIntoView 触发死循环
+    // 临时关闭同步，防止 scrollIntoView 触发 scroll 事件导致死循环
     const oldSync = syncScroll.value
     syncScroll.value = false
     
     el.scrollIntoView({ behavior: 'smooth', block: 'center' })
     
+    // 延时恢复同步，等待滚动动画结束
     setTimeout(() => { syncScroll.value = oldSync }, 1000)
   }
 }
 
-// 2. Markdown -> PDF (点击 MD Block -> 高亮 PDF)
+// 2. 点击 Markdown 某块 -> 左侧 PDF 跳转并画框
 const handleMarkdownClick = (block: any) => {
   if (!block || !pdfViewerRef.value) return
   
@@ -367,22 +383,19 @@ const handleMarkdownClick = (block: any) => {
   const oldSync = syncScroll.value
   syncScroll.value = false
 
-  // 转换页码：JSON 通常是 0-based，PDF.js 是 1-based
-  // 这里需要非常小心，MinerU 的 page_idx 是 0 开始的
+  // 转换页码：PDF.js 使用 1-based index
   const pageIndex = (typeof block.page_idx === 'number' ? block.page_idx : block.page_id) + 1
   
-  // 调用 PDF 组件的高亮方法
+  // 调用 PDF 组件的高亮接口
   pdfViewerRef.value.highlightBlock(pageIndex, block.bbox)
   
   setTimeout(() => { syncScroll.value = oldSync }, 1000)
 }
 
-// Actions
+// --- Actions & Data Loading ---
+
 const setMode = (mode: 'single' | 'split') => layoutMode.value = mode
 
-// ----------------------------------------------------------------
-// Data Fetching & Polling
-// ----------------------------------------------------------------
 let stopPolling: (() => void) | null = null
 
 async function refreshTask() {
@@ -417,9 +430,7 @@ const downloadMarkdown = () => {
   URL.revokeObjectURL(url)
 }
 
-// ----------------------------------------------------------------
-// Action Handling (Retry, Clear Cache, etc.)
-// ----------------------------------------------------------------
+// --- Action Dialogs ---
 const showConfirm = ref(false)
 const confirmTitle = ref('')
 const confirmMessage = ref('')
@@ -460,7 +471,7 @@ async function executeAction() {
   }
 }
 
-// Lifecycle
+// --- Lifecycle ---
 onMounted(async () => {
   await refreshTask()
   if (task.value && ['pending', 'processing'].includes(task.value.status)) {
@@ -474,10 +485,8 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.mode-btn { @apply px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center text-gray-500 hover:text-gray-700; }
-.mode-btn.active { @apply bg-white text-primary-600 shadow-sm; }
-.tab-btn { @apply text-xs px-3 py-1 rounded transition-all text-gray-500; }
-.tab-btn.active { @apply bg-white text-gray-900 shadow-sm font-medium; }
+.tab-btn { @apply text-xs px-3 py-1 rounded transition-all text-gray-500 font-medium; }
+.tab-btn.active { @apply bg-white text-gray-900 shadow-sm; }
 
 .custom-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
 .custom-scrollbar::-webkit-scrollbar-track { background: #f9fafb; }
