@@ -25,7 +25,7 @@
 
     <div 
       ref="containerRef" 
-      class="flex-1 overflow-y-auto relative w-full custom-scrollbar outline-none scroll-smooth" 
+      class="flex-1 overflow-y-auto relative w-full custom-scrollbar outline-none" 
       @scroll="onScroll"
       tabindex="0"
     >
@@ -41,10 +41,7 @@
         >
           <div 
             class="bg-white shadow-sm relative transition-shadow hover:shadow-md"
-            :style="{ 
-              width: page.width + 'px', 
-              height: page.height + 'px' 
-            }"
+            :style="{ width: page.width + 'px', height: page.height + 'px' }"
           >
             <div v-if="!page.rendered" class="absolute inset-0 flex items-center justify-center bg-white z-10">
               <div class="flex flex-col items-center">
@@ -54,24 +51,24 @@
             </div>
             
             <canvas 
-              :ref="(el) => renderPage(el as HTMLCanvasElement, page)" 
-              class="block w-full h-full"
+              :ref="(el) => triggerRender(el, page)" 
+              class="block w-full h-full relative z-0"
             ></canvas>
 
             <div v-if="page.rendered && layoutDataMap[page.index]" class="absolute inset-0 z-20 pointer-events-none">
               <div
                 v-for="block in layoutDataMap[page.index]"
                 :key="block.id"
-                class="absolute cursor-pointer pointer-events-auto hover:bg-blue-600/15 hover:border hover:border-blue-500 transition-colors rounded-[2px]"
+                class="absolute cursor-pointer pointer-events-auto hover:bg-blue-500/20 border border-transparent hover:border-blue-400 transition-colors rounded-[2px]"
                 :style="getBlockStyle(block.bbox)"
-                @click.stop="$emit('block-click', block)"
-                :title="`定位到文本 (ID: ${block.id})`"
+                @click.stop="onBlockClick(block)"
+                :title="`定位到解析内容 (ID: ${block.id})`"
               ></div>
             </div>
 
             <div 
               v-if="highlight && highlight.pageIndex === page.index"
-              class="absolute z-30 border-[3px] border-red-500 bg-red-500/20 animate-pulse pointer-events-none box-border rounded-[2px] shadow-[0_0_12px_rgba(239,68,68,0.6)]"
+              class="absolute z-30 border-[3px] border-red-500 bg-red-500/10 animate-pulse pointer-events-none box-border rounded-[2px] shadow-[0_0_12px_rgba(239,68,68,0.6)]"
               :style="getBlockStyle(highlight.bbox)"
             ></div>
 
@@ -102,6 +99,7 @@ const emit = defineEmits<{
   (e: 'scroll', payload: { scrollTop: number; scrollHeight: number; clientHeight: number }): void
   (e: 'block-click', block: any): void
   (e: 'page-loaded', total: number): void
+  (e: 'visible-block-change', blockId: number): void
 }>()
 
 function debounce<T extends (...args: any[]) => void>(fn: T, delay: number) {
@@ -135,7 +133,6 @@ const PAGE_GAP = 16
 
 const currentPage = computed(() => {
   if (!pagesMetaData.value.length) return 0
-  // 获取视口偏上部分的页面作为当前阅读页，利于精确同步
   const center = scrollTop.value + (containerHeight.value / 3)
   const page = pagesMetaData.value.find(p => center >= p.top && center <= (p.top + p.height + PAGE_GAP))
   return page ? page.index : 1
@@ -231,12 +228,11 @@ const loadPdf = async (url: string) => {
   }
 }
 
-// 🚀 [修复白屏] 增加重试机制，确保容器被撑开后才执行算力
 const initLayout = async (retryCount = 0) => {
   if (!pdfDoc.value || !containerRef.value) return
   
   const containerW = containerRef.value.clientWidth
-  // 容器宽度为0说明DOM尚未布局，最多重试 20 次 (约2秒)
+  // 智能轮询：防止被隐藏的 Grid/Flex 导致 clientWidth 为 0 造成的彻底白屏
   if (containerW <= 0) {
     if (retryCount < 20) {
       setTimeout(() => initLayout(retryCount + 1), 100)
@@ -287,14 +283,16 @@ const initLayout = async (retryCount = 0) => {
   }
 }
 
-const renderPage = async (canvas: HTMLCanvasElement | null, pageMeta: any) => {
-  if (!canvas || !pdfDoc.value) return
-  if (renderedPages.has(pageMeta.index) || renderTasks.has(pageMeta.index)) return
+// 稳定触发渲染，解决白屏滑动才出的 bug
+const triggerRender = (el: any, page: any) => {
+  if (!el || !pdfDoc.value || page.rendered || renderTasks.has(page.index)) return;
+  renderPage(el, page);
+}
 
+const renderPage = async (canvas: HTMLCanvasElement, pageMeta: any) => {
   try {
     renderedPages.add(pageMeta.index)
-    
-    const page = await pdfDoc.value.getPage(pageMeta.index)
+    const page = await pdfDoc.value!.getPage(pageMeta.index)
     const dpr = window.devicePixelRatio || 1
     canvas.width = pageMeta.width * dpr
     canvas.height = pageMeta.height * dpr
@@ -344,10 +342,39 @@ const getBlockStyle = (bbox: any) => {
   return {
     left: `${x0 * s}px`,
     top: `${y0 * s}px`,
-    width: `${w * s}px`,
-    height: `${h * s}px`
+    width: `${Math.max(w * s, 4)}px`,
+    height: `${Math.max(h * s, 4)}px`
   }
 }
+
+const onBlockClick = (block: any) => {
+  emit('block-click', block);
+}
+
+// 核心优化：防抖计算当前可视区域中最顶部的 Block (用于语义同步滚动)
+const calculateActiveBlock = debounce(() => {
+  const center = scrollTop.value + 60; // 取视口偏上的位置
+  const page = pagesMetaData.value.find(p => center >= p.top && center <= (p.top + p.height + PAGE_GAP));
+  if (!page) return;
+
+  const blocks = layoutDataMap.value[page.index];
+  if (!blocks || blocks.length === 0) return;
+
+  const relativeY = (center - page.top) / scale.value;
+  let activeBlock = blocks[0];
+  
+  for(const b of blocks) {
+     let by = Array.isArray(b.bbox[0]) ? Math.min(...b.bbox.map((p:any)=>p[1])) : b.bbox[1];
+     if (by >= relativeY) {
+         activeBlock = b;
+         break;
+     }
+  }
+  
+  if (activeBlock) {
+     emit('visible-block-change', activeBlock.id);
+  }
+}, 80);
 
 const onScroll = (e: Event) => {
   const target = e.target as HTMLElement
@@ -357,28 +384,26 @@ const onScroll = (e: Event) => {
     scrollHeight: target.scrollHeight,
     clientHeight: target.clientHeight
   })
+  calculateActiveBlock()
 }
 
-// 暴露 API：带有红色闪烁框的平滑跳转
+// 点击时：带有红色闪烁框的平滑跳转 (Smooth Scroll)
 const highlightBlock = (pageIndex: number, bbox: any) => {
   if (!containerRef.value) return
-  
   highlight.value = { pageIndex, bbox }
   const pageMeta = pagesMetaData.value.find(p => p.index === pageIndex)
-  
   if (pageMeta) {
     let blockY = 0;
     if (bbox && bbox.length === 4) {
        blockY = Array.isArray(bbox[0]) ? Math.min(...bbox.map((p:any) => p[1])) : bbox[1];
     }
-    const targetScroll = pageMeta.top + (blockY * scale.value) - (containerHeight.value / 3)
+    const targetScroll = pageMeta.top + (blockY * scale.value) - (containerHeight.value / 4)
     containerRef.value.scrollTo({ top: Math.max(0, targetScroll), behavior: 'smooth' })
-    
     setTimeout(() => { highlight.value = null }, 3000)
   }
 }
 
-// 🚀 [新功能] 暴露 API：静默对齐跳转 (解决双向滚动错乱的问题)
+// 同步滑动时：无动画静默跳转 (Auto Scroll，防卡顿)
 const silentScrollToBlock = (pageIndex: number, bbox: any) => {
   if (!containerRef.value) return
   const pageMeta = pagesMetaData.value.find(p => p.index === pageIndex)
@@ -387,9 +412,8 @@ const silentScrollToBlock = (pageIndex: number, bbox: any) => {
     if (bbox && bbox.length === 4) {
        blockY = Array.isArray(bbox[0]) ? Math.min(...bbox.map((p:any) => p[1])) : bbox[1];
     }
-    // 抵消一点顶部留白
     const targetScroll = pageMeta.top + (blockY * scale.value) - 40 
-    containerRef.value.scrollTo({ top: Math.max(0, targetScroll), behavior: 'auto' }) // auto 不带动画，防止闪烁
+    containerRef.value.scrollTo({ top: Math.max(0, targetScroll), behavior: 'auto' }) 
   }
 }
 
@@ -403,7 +427,7 @@ onMounted(() => {
       if (!containerRef.value) return
       const currentWidth = containerRef.value.clientWidth
       
-      // 如果之前宽度是 0，说明刚从白屏恢复，触发渲染
+      // 尺寸复苏，立即启动布局渲染
       if (currentWidth > 0 && pagesMetaData.value.length === 0 && pdfDoc.value) {
          initLayout()
       } else if (currentWidth > 0 && Math.abs(currentWidth - lastWidth) > 1) {
@@ -411,7 +435,7 @@ onMounted(() => {
       } else if (currentWidth > 0) {
         containerHeight.value = containerRef.value.clientHeight
       }
-    }, 100)
+    }, 150)
 
     resizeObserver = new ResizeObserver(handleResize)
     resizeObserver.observe(containerRef.value)
@@ -429,7 +453,6 @@ onUnmounted(() => {
   renderTasks.forEach(t => t.cancel())
 })
 
-// 统一导出供父组件使用
 defineExpose({ highlightBlock, silentScrollToBlock, currentPage })
 </script>
 
