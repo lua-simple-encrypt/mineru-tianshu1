@@ -13,25 +13,24 @@
       <button @click="retry" class="px-5 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition shadow-sm text-sm font-medium">重新加载</button>
     </div>
 
-    <div ref="scrollContainer" class="flex-1 overflow-y-auto w-full custom-scrollbar relative p-4 space-y-4" @scroll="onScroll">
-      
+    <div ref="scrollContainer" class="flex-1 overflow-y-auto w-full custom-scrollbar relative outline-none" @scroll="onScroll" tabindex="0">
       <div :style="{ height: totalHeight + 'px' }" class="relative w-full">
         <div 
           v-for="page in visiblePages" 
           :key="page.id"
-          :id="`pdf-page-${page.id}`"
-          :data-page="page.id"
           class="absolute left-0 w-full flex justify-center transition-opacity duration-200"
           :style="{ top: page.top + 'px', height: page.height + 'px' }"
         >
           <div class="bg-white shadow-sm relative transition-shadow hover:shadow-md" :style="{ width: page.width + 'px', height: page.height + 'px' }">
             
             <div v-if="!page.rendered" class="absolute inset-0 flex items-center justify-center bg-gray-50/50 z-10">
-              <div class="w-8 h-8 border-4 border-gray-200 border-t-primary-600 rounded-full animate-spin mb-2"></div>
-              <span class="text-gray-400 text-xs font-mono font-medium absolute mt-12">Page {{ page.id }}</span>
+              <div class="flex flex-col items-center">
+                <div class="w-8 h-8 border-4 border-gray-200 border-t-primary-600 rounded-full animate-spin mb-2"></div>
+                <span class="text-gray-400 text-xs font-mono font-medium absolute mt-12">Page {{ page.id }}</span>
+              </div>
             </div>
 
-            <canvas :id="`canvas-${page.id}`" class="block w-full h-full relative z-0"></canvas>
+            <canvas :id="`pdf-canvas-${page.id}`" class="block w-full h-full relative z-0"></canvas>
 
             <div v-if="page.rendered && layoutMap[page.id]" class="absolute inset-0 z-20 pointer-events-none">
               <div
@@ -40,7 +39,7 @@
                 class="absolute cursor-pointer pointer-events-auto border border-transparent hover:border-blue-400 hover:bg-blue-500/15 transition-all rounded-[2px]"
                 :style="getBlockStyle(page.id, block.bbox)"
                 @click.stop="$emit('block-click', block)"
-                :title="`双向定位 (ID: ${block.id})`"
+                :title="`定位到解析结果 (ID: ${block.id})`"
               ></div>
             </div>
 
@@ -62,7 +61,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
+import { ref, computed, watch, nextTick, onUnmounted, onMounted } from 'vue'
 import * as pdfjsLib from 'pdfjs-dist'
 import pdfWorker from 'pdfjs-dist/build/pdf.worker?url'
 
@@ -88,7 +87,7 @@ const highlightTarget = ref<{ pageIndex: number; bbox: any[] } | null>(null)
 
 const scrollTop = ref(0)
 const containerHeight = ref(0)
-const totalHeight = ref(0) // 🚨 这个绝对不能丢，否则没有滚动条！
+const totalHeight = ref(0) // 🚨 绝对不可丢：滚动条支柱
 const totalPages = ref(0)
 const globalScale = ref(1.0)
 const PAGE_GAP = 16 
@@ -97,11 +96,12 @@ interface PageData {
   id: number
   width: number
   height: number
-  top: number // 🚨 这个绝对不能丢，否则全都叠在 top: 0！
+  top: number // 🚨 绝对不可丢：盒子绝对定位坐标
   viewport: any
   rendered: boolean
 }
 const pages = ref<PageData[]>([])
+const renderTasks = new Map<number, any>()
 
 // =======================================================
 // 🚀 坐标换算与数据映射核心
@@ -160,40 +160,10 @@ const getBlockStyle = (pageId: number, bbox: any) => {
 }
 
 // =======================================================
-// 🚀 IntersectionObserver：解决白屏，自动渲染
+// 🚀 核心控制：取代 Observer 的强力 Vue 渲染逻辑
 // =======================================================
 
-let observer: IntersectionObserver | null = null
-const renderTasks = new Map<number, any>()
-
-const initObserver = () => {
-  if (observer) observer.disconnect()
-  observer = new IntersectionObserver((entries) => {
-    entries.forEach(entry => {
-      const pageId = Number((entry.target as HTMLElement).dataset.page)
-      const page = pages.value.find(p => p.id === pageId)
-      if (!page) return
-
-      if (entry.isIntersecting) {
-        if (!page.rendered && !renderTasks.has(pageId)) {
-          renderCanvas(page)
-        }
-      }
-    })
-  }, {
-    root: scrollContainer.value,
-    rootMargin: '400px 0px', // 上下预先渲染 400px，防止滑动太快出现白屏
-    threshold: 0.01
-  })
-
-  // 等待 DOM 上的 wrapper 容器创建完毕后开始监听
-  nextTick(() => {
-    const pageNodes = scrollContainer.value?.querySelectorAll('.pdf-page-wrapper')
-    pageNodes?.forEach(node => observer?.observe(node))
-  })
-}
-
-// 虚拟列表控制：只在 DOM 树中保留视野内及附近的盒子
+// 虚拟列表控制：计算出视野内（及上下一定范围）的页面
 const visiblePages = computed(() => {
   if (pages.value.length === 0) return []
   const startY = scrollTop.value - containerHeight.value * 1.5
@@ -209,19 +179,32 @@ const visiblePages = computed(() => {
   return result
 })
 
-// 清理滚出内存的 Canvas
+// 🚀 白屏杀手锏：只要 visiblePages 变化，立即强求 Vue 渲染真实的 Canvas
 watch(visiblePages, (newPages, oldPages) => {
-  if (!oldPages) return;
+  if (!newPages || newPages.length === 0) return;
+
+  // 1. 回收旧的页面内存
   const newIndices = new Set(newPages.map(p => p.id));
-  oldPages.forEach(p => {
-    if (!newIndices.has(p.id)) {
-      const orig = pages.value.find(o => o.id === p.id)
-      if (orig) orig.rendered = false
-      const task = renderTasks.get(p.id);
-      if (task) { task.cancel(); renderTasks.delete(p.id); }
-    }
-  });
-})
+  if (oldPages) {
+    oldPages.forEach(p => {
+      if (!newIndices.has(p.id)) {
+        const orig = pages.value.find(o => o.id === p.id)
+        if (orig) orig.rendered = false
+        const task = renderTasks.get(p.id);
+        if (task) { task.cancel(); renderTasks.delete(p.id); }
+      }
+    });
+  }
+
+  // 2. 将刚进入视野的页面绘制出来
+  nextTick(() => {
+    newPages.forEach(p => {
+      if (!p.rendered && !renderTasks.has(p.id)) {
+        renderCanvas(p);
+      }
+    })
+  })
+}, { immediate: true, deep: true })
 
 const onScroll = (e: Event) => {
   scrollTop.value = (e.target as HTMLElement).scrollTop
@@ -264,7 +247,7 @@ const buildPageSkeletons = async (retryCount = 0) => {
   processing.value = true
 
   const containerW = scrollContainer.value.clientWidth - 40
-  // 必须等到容器被撑开
+  // 必须等到容器被撑开，否则一直重试
   if (containerW <= 0) {
     if (retryCount < 50) setTimeout(() => buildPageSkeletons(retryCount + 1), 50)
     return
@@ -298,19 +281,22 @@ const buildPageSkeletons = async (retryCount = 0) => {
   pages.value = newPages
   totalHeight.value = currentTop // 这个保证了滚动条的出现
   processing.value = false
-  initObserver() // 开始监听并渲染
 }
 
+// 执行 PDF.js 的页面渲染
 const renderCanvas = async (pageInfo: PageData) => {
   if (!pdfProxy) return
+  
+  const canvasId = `pdf-canvas-${pageInfo.id}`
+  const canvas = document.getElementById(canvasId) as HTMLCanvasElement
+  // 防御性拦截：如果因为页面切换太快 DOM 还不在，就放弃渲染
+  if (!canvas) return
+
   renderTasks.set(pageInfo.id, true)
+  const origPage = pages.value.find(p => p.id === pageInfo.id)
   
   try {
-    const pdfPage = await pdfProxy.getPage(pageInfo.id)
-    // 强制获取 DOM 进行绘制
-    const canvas = document.getElementById(`canvas-${pageInfo.id}`) as HTMLCanvasElement
-    if (!canvas) return
-
+    const page = await pdfProxy.getPage(pageInfo.id)
     const dpr = window.devicePixelRatio || 1
     canvas.width = pageInfo.width * dpr
     canvas.height = pageInfo.height * dpr
@@ -318,14 +304,13 @@ const renderCanvas = async (pageInfo: PageData) => {
     if (!ctx) return
 
     const renderCtx = { canvasContext: ctx, viewport: pageInfo.viewport, transform: [dpr, 0, 0, dpr, 0, 0] }
-    await pdfPage.render(renderCtx).promise
+    await page.render(renderCtx).promise
     
-    // 乐观锁状态更新
-    const origPage = pages.value.find(p => p.id === pageInfo.id)
+    // 渲染成功后，更新状态，让热区盖上来
     if (origPage) origPage.rendered = true
-    
   } catch (err: any) {
     if (err.name !== 'RenderingCancelledException') console.warn(`Render Page ${pageInfo.id} failed:`, err)
+    if (origPage) origPage.rendered = false
   } finally {
     renderTasks.delete(pageInfo.id)
   }
@@ -354,10 +339,25 @@ const highlightBlock = (pageIndex: number, bbox: any) => {
   }
 }
 
+// 重启大小监视：用于在浏览器窗口大小改变时重绘
+let resizeTimeout: any = null
+const handleResize = () => {
+  clearTimeout(resizeTimeout)
+  resizeTimeout = setTimeout(() => {
+    if (pdfProxy && scrollContainer.value && scrollContainer.value.clientWidth > 0) {
+      buildPageSkeletons()
+    }
+  }, 200)
+}
+
+onMounted(() => {
+  window.addEventListener('resize', handleResize)
+})
+
 watch(() => props.src, (url) => { if(url) loadPdf(url) }, { immediate: true })
 
 onUnmounted(() => {
-  if (observer) observer.disconnect()
+  window.removeEventListener('resize', handleResize)
   if (pdfProxy) { pdfProxy.destroy(); pdfProxy = null }
   renderTasks.clear()
 })
