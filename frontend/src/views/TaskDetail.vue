@@ -8,15 +8,22 @@
         <div class="h-4 w-px bg-gray-300"></div>
         <h1 class="text-xl font-bold text-gray-900 truncate max-w-md" :title="task?.file_name">{{ task?.file_name || $t('task.taskDetail') }}</h1>
         <StatusBadge v-if="task" :status="task.status" />
+        <span v-if="task?.result_path === 'CLEARED'" class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500 border border-gray-200">
+           <Eraser class="w-3 h-3 mr-1.5" /> {{ $t('status.cleared') }}
+        </span>
       </div>
 
       <div class="flex items-center gap-3">
-        <div v-if="layoutMode === 'split'" class="flex items-center gap-2 mr-2 bg-white px-3 py-1.5 rounded-lg border border-gray-200 shadow-sm transition-all">
-          <label class="flex items-center cursor-pointer text-xs font-medium text-gray-700 select-none">
-            <input type="checkbox" v-model="syncScroll" class="mr-2 rounded text-primary-600 focus:ring-primary-500 border-gray-300 cursor-pointer">
-            <span>{{ $t('task.syncScroll') || '同步滚动' }}</span>
-          </label>
-        </div>
+        <template v-if="task">
+            <button v-if="task.status === 'failed'" @click="initiateAction('retry')" :disabled="actionLoading" class="btn btn-white text-blue-600 border-gray-200 hover:bg-blue-50 btn-sm flex items-center shadow-sm transition-all disabled:opacity-50">
+              <RotateCw :class="{'animate-spin': actionLoading && currentAction === 'retry'}" class="w-4 h-4 sm:mr-1.5" />
+              <span class="hidden sm:inline">{{ $t('task.retryTask') }}</span>
+            </button>
+            <button v-if="['completed', 'failed'].includes(task.status) && task.result_path !== 'CLEARED'" @click="initiateAction('clearCache')" :disabled="actionLoading" class="btn btn-white text-orange-600 border-gray-200 hover:bg-orange-50 btn-sm flex items-center shadow-sm transition-all disabled:opacity-50">
+              <Eraser :class="{'animate-pulse': actionLoading && currentAction === 'clearCache'}" class="w-4 h-4 sm:mr-1.5" />
+              <span class="hidden sm:inline">{{ $t('task.clearCache') }}</span>
+            </button>
+        </template>
 
         <div v-if="task?.status === 'completed' && pdfUrl && task?.result_path !== 'CLEARED'" class="flex items-center bg-gray-100 rounded-lg p-1">
           <button @click="setMode('single')" :class="['px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center', layoutMode === 'single' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700']">
@@ -26,6 +33,8 @@
             <Columns class="w-3.5 h-3.5 mr-1.5" /> {{ $t('task.splitView') }}
           </button>
         </div>
+
+        <button @click="refreshTask()" :disabled="loading" class="btn btn-secondary btn-sm shadow-sm"><RefreshCw :class="{ 'animate-spin': loading }" class="w-4 h-4" /></button>
       </div>
     </div>
 
@@ -35,26 +44,36 @@
     <div v-else-if="task" class="flex-1 min-h-0 relative">
       <div v-if="['pending', 'processing', 'paused'].includes(task.status)" class="max-w-3xl mx-auto mt-16 space-y-6 px-4">
          <div class="card p-10 text-center shadow-sm">
-            <h2 class="text-xl font-semibold text-gray-900 mb-2">处理中...</h2>
-            <div class="mt-8 flex justify-center"><LoadingSpinner size="lg" /></div>
+            <h2 class="text-xl font-semibold text-gray-900 mb-2">{{ task.status === 'paused' ? $t('status.paused') : $t('task.taskProcessing') }}</h2>
+            <div class="mt-8 flex justify-center"><div v-if="task.status === 'paused'" class="p-4 bg-amber-50 rounded-full text-amber-500 ring-8 ring-amber-50/50"><Pause class="w-8 h-8" /></div><LoadingSpinner v-else size="lg" /></div>
          </div>
+      </div>
+      <div v-else-if="['failed', 'cancelled'].includes(task.status)" class="max-w-3xl mx-auto mt-10 space-y-6 px-4">
+         <div class="card p-8 text-center border-red-100 bg-red-50/50">
+            <div class="flex justify-center mb-4"><div class="p-3 bg-red-100 rounded-full text-red-500"><AlertCircle class="w-8 h-8" /></div></div>
+            <h2 class="text-xl font-semibold text-red-700 mb-2">{{ task.status === 'failed' ? $t('status.failed') : $t('status.cancelled') }}</h2>
+            <div class="text-red-600 bg-white p-4 rounded-lg border border-red-200 font-mono text-sm text-left overflow-auto max-h-64 break-all shadow-sm">{{ task.error_message || 'Unknown error occurred' }}</div>
+         </div>
+      </div>
+      <div v-else-if="task.result_path === 'CLEARED'" class="max-w-3xl mx-auto mt-16 px-4">
+        <div class="card p-12 text-center border-gray-200 bg-gray-50/30 shadow-sm"><div class="flex justify-center mb-6"><Eraser class="w-12 h-12 text-gray-400" /></div><h2 class="text-xl font-semibold text-gray-900 mb-2">{{ $t('task.filesCleared') }}</h2></div>
       </div>
 
       <div v-else class="h-full w-full flex flex-row gap-4">
         
         <div v-if="showPdf" :class="['card p-0 flex flex-col h-full border border-gray-200 relative shadow-sm min-w-0 transition-all duration-300', layoutMode === 'split' ? 'flex-1 basis-1/2' : 'flex-1 basis-full']">
           <div class="bg-gray-50 px-3 py-2 border-b border-gray-200 flex justify-between items-center shrink-0">
-            <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">{{ $t('task.sourceDocPreview') }}</span>
+            <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+              源文档预览 (点击蓝色热区对应右侧)
+            </span>
           </div>
           
-          <div class="flex-1 bg-gray-200 relative overflow-hidden min-h-0">
+          <div class="flex-1 relative overflow-hidden min-h-0 bg-gray-200">
             <VirtualPdfViewer
               ref="pdfViewerRef"
               :src="pdfUrl"
               :layout-data="layoutData"
-              @layout-ready="debouncedBuildScrollMap"
-              @scroll="handlePdfScroll"
-              @block-click="handleBlockClick"
+              @block-click="handlePdfBlockClick"
             />
           </div>
         </div>
@@ -70,26 +89,30 @@
             </button>
           </div>
           
-          <div ref="markdownContainerRef" class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden bg-white relative custom-scrollbar p-6 scroll-smooth" @scroll="handleMarkdownScroll">
+          <div class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden bg-white relative custom-scrollbar p-6">
             <div v-if="activeTab === 'markdown'" class="w-full">
-              
               <div v-if="layoutData.length > 0" class="prose prose-sm max-w-none text-gray-700 break-words">
                 <div 
                   v-for="block in layoutData" 
                   :key="block.id"
-                  :id="`block-${block.id}`"
-                  :data-id="block.id"
-                  @click="handleMarkdownClick(block)"
+                  :id="`md-block-${block.id}`"
+                  @click="handleMarkdownBlockClick(block)"
                   :class="['mb-4 p-3 rounded-md transition-colors cursor-pointer border break-words w-full', 
                            activeBlockId === block.id 
-                             ? 'bg-yellow-50 border-yellow-300 shadow-sm ring-1 ring-yellow-100' 
+                             ? 'bg-yellow-50 border-yellow-400 shadow-md ring-2 ring-yellow-200' 
                              : 'border-transparent hover:bg-gray-50 hover:border-gray-200']"
+                  title="点击在左侧 PDF 中定位"
                 >
+                  <div v-if="block.type === 'image'" class="text-gray-400 text-xs italic mb-1 flex items-center gap-1 select-none">
+                    <Image class="w-3 h-3"/> [提取的图片内容]
+                  </div>
+                  <div v-else-if="block.type === 'table'" class="text-gray-400 text-xs italic mb-1 flex items-center gap-1 select-none">
+                    <Table class="w-3 h-3"/> [提取的表格内容]
+                  </div>
                   <div class="whitespace-pre-wrap leading-relaxed max-w-full overflow-hidden">{{ block.text }}</div>
                 </div>
               </div>
               <MarkdownViewer v-else :content="task.data?.content || ''" />
-
             </div>
             <div v-else class="h-full w-full"><JsonViewer :data="task.data?.json_content || {}" /></div>
           </div>
@@ -97,15 +120,17 @@
 
       </div>
     </div>
+
+    <ConfirmDialog v-model="showConfirm" :title="confirmTitle" :message="confirmMessage" :type="confirmType" @confirm="executeAction" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useTaskStore } from '@/stores'
-import { ArrowLeft, AlertCircle, RefreshCw, FileText, Columns, Download, RotateCw, Eraser, Pause, Eye, ExternalLink, Image, Table } from 'lucide-vue-next'
+import { ArrowLeft, AlertCircle, RefreshCw, FileText, Columns, Download, RotateCw, Eraser, Pause, Image, Table } from 'lucide-vue-next'
 import StatusBadge from '@/components/StatusBadge.vue'
 import LoadingSpinner from '@/components/LoadingSpinner.vue'
 import MarkdownViewer from '@/components/MarkdownViewer.vue'
@@ -120,21 +145,22 @@ const taskStore = useTaskStore()
 const taskId = computed(() => route.params.id as string)
 const task = computed(() => taskStore.currentTask)
 const loading = ref(false)
+const actionLoading = ref(false)
 const error = ref('')
 
 const activeTab = ref<'markdown' | 'json'>('markdown')
 const layoutMode = ref<'split' | 'single'>('split')
-const syncScroll = ref(true) 
+
+// 记录当前被点击激活的模块 ID
 const activeBlockId = ref<number | null>(null) 
 
 const pdfViewerRef = ref<InstanceType<typeof VirtualPdfViewer> | null>(null)
-const markdownContainerRef = ref<HTMLElement | null>(null)
 
 const pdfUrl = computed(() => task.value?.data?.pdf_path ? `/api/v1/files/output/${task.value.data.pdf_path}` : null)
 const showPdf = computed(() => layoutMode.value === 'split' || (layoutMode.value === 'single' && pdfUrl.value))
 const showMarkdown = computed(() => layoutMode.value === 'split' || layoutMode.value !== 'single')
 
-// 扁平化数据供给
+// 格式化后端返回的排版数据，方便点击索引
 const layoutData = computed(() => {
   const jsonContent = task.value?.data?.json_content
   if (!jsonContent) return []
@@ -151,111 +177,39 @@ const layoutData = computed(() => {
 })
 
 // =======================================================
-// 🚀 [终极进化版] 插值映射同步滑动与互锁 (避免卡顿)
+// 🎯 精准双向定位交互 (无任何连带滚动逻辑)
 // =======================================================
 
-const scrollMap = ref<{ pdfY: number, mdY: number }[]>([]);
-
-const buildScrollMap = () => {
-    if (!pdfViewerRef.value || !markdownContainerRef.value || layoutData.value.length === 0) return;
-    const newMap = [];
-    for (const b of layoutData.value) {
-        const mdEl = document.getElementById(`block-${b.id}`);
-        if (!mdEl) continue;
-        
-        const mdY = mdEl.offsetTop - 24; 
-        const pdfY = pdfViewerRef.value.getBlockScrollY(b) - 24;
-        
-        if (pdfY > 0) newMap.push({ pdfY, mdY });
-    }
-    newMap.sort((a, b) => a.pdfY - b.pdfY); // 按PDF高度排序
-    scrollMap.value = newMap;
-}
-
-let timeoutId: any;
-const debouncedBuildScrollMap = () => {
-  clearTimeout(timeoutId);
-  timeoutId = setTimeout(() => { nextTick(() => buildScrollMap()) }, 300);
-}
-
-watch([layoutData, activeTab, layoutMode], () => debouncedBuildScrollMap(), { deep: true })
-
-// 互斥锁控制同步，不再使用setTimeout引起动画卡顿！
-let ignoreNextPdfEvent = false;
-let ignoreNextMdEvent = false;
-
-// 线性插值查表
-const interpolate = (val: number, map: any[], keyFrom: 'pdfY' | 'mdY', keyTo: 'pdfY' | 'mdY') => {
-    if (map.length === 0) return 0;
-    if (val <= map[0][keyFrom]) return map[0][keyTo];
-    if (val >= map[map.length - 1][keyFrom]) return map[map.length - 1][keyTo];
-
-    for (let i = 0; i < map.length - 1; i++) {
-        if (val >= map[i][keyFrom] && val <= map[i+1][keyFrom]) {
-            const range = map[i+1][keyFrom] - map[i][keyFrom];
-            if (range === 0) return map[i][keyTo];
-            const ratio = (val - map[i][keyFrom]) / range;
-            return map[i][keyTo] + ratio * (map[i+1][keyTo] - map[i][keyTo]);
-        }
-    }
-    return 0;
-}
-
-// 核心同步：左拉拉右
-const handlePdfScroll = ({ scrollTop }: any) => {
-  if (ignoreNextPdfEvent) { ignoreNextPdfEvent = false; return; }
-  if (!syncScroll.value || !markdownContainerRef.value || scrollMap.value.length === 0) return;
+// 1. 点击左侧 PDF 上的透明热区 -> 右侧对应的 Markdown 亮起黄框，并滚入视野
+const handlePdfBlockClick = (block: any) => {
+  if (!block) return
   
-  const targetY = interpolate(scrollTop, scrollMap.value, 'pdfY', 'mdY');
-  ignoreNextMdEvent = true; // 马上设置拦截，Markdown触发滚动时直接忽略
-  markdownContainerRef.value.scrollTo({ top: Math.max(0, targetY), behavior: 'auto' });
-}
-
-// 核心同步：右拉拉左
-const handleMarkdownScroll = (e: Event) => {
-  if (ignoreNextMdEvent) { ignoreNextMdEvent = false; return; }
-  if (!syncScroll.value || !pdfViewerRef.value || scrollMap.value.length === 0) return;
+  // 点亮右侧段落
+  activeBlockId.value = block.id 
   
-  const target = e.target as HTMLElement;
-  const targetY = interpolate(target.scrollTop, scrollMap.value, 'mdY', 'pdfY');
-  ignoreNextPdfEvent = true;
-  pdfViewerRef.value.scrollToY(targetY);
-}
-
-// =======================================================
-// 🎯 精准定位点击高亮功能
-// =======================================================
-
-const handleBlockClick = (block: any) => {
-  if (!block || !markdownContainerRef.value) return
-  activeBlockId.value = block.id
-  
-  const el = document.getElementById(`block-${block.id}`)
+  // 找到右侧 DOM 并滑动过去
+  const el = document.getElementById(`md-block-${block.id}`)
   if (el) {
-    const oldSync = syncScroll.value
-    syncScroll.value = false // 关掉同步锁以防止平滑动画触发抖动
-    
     el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    setTimeout(() => { syncScroll.value = oldSync }, 800)
   }
 }
 
-const handleMarkdownClick = (block: any) => {
-  if (!block || !pdfViewerRef.value) return
-  activeBlockId.value = block.id
+// 2. 点击右侧 Markdown 段落 -> 呼叫左侧 PDF 引擎跳转到该页并闪烁红框
+const handleMarkdownBlockClick = (block: any) => {
+  if (!block) return
   
-  const oldSync = syncScroll.value
-  syncScroll.value = false
-
-  const pageIndex = (typeof block.page_idx === 'number' ? block.page_idx : block.page_id) + 1
-  if (typeof pdfViewerRef.value.highlightBlock === 'function') {
+  // 点亮自己
+  activeBlockId.value = block.id 
+  
+  // 通知 PDF Viewer 滑动并画框
+  if (pdfViewerRef.value && typeof pdfViewerRef.value.highlightBlock === 'function') {
+    const pageIndex = (typeof block.page_idx === 'number' ? block.page_idx : block.page_id) + 1
     pdfViewerRef.value.highlightBlock(pageIndex, block.bbox)
   }
-  setTimeout(() => { syncScroll.value = oldSync }, 800)
 }
 
 // =======================================================
-// 生命周期管理
+// 生命周期与基础逻辑
 // =======================================================
 const setMode = (mode: 'split' | 'single') => { layoutMode.value = mode }
 let stopPolling: (() => void) | null = null
@@ -274,6 +228,46 @@ function startPolling() {
   })
 }
 
+const downloadMarkdown = () => {
+  if (!task.value?.data?.content) return
+  const blob = new Blob([task.value.data.content], { type: 'text/markdown' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = task.value.data.markdown_file || `${taskId.value}.md`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+const showConfirm = ref(false)
+const confirmTitle = ref('')
+const confirmMessage = ref('')
+const confirmType = ref<'info' | 'warning' | 'danger'>('info')
+const currentAction = ref<'retry' | 'clearCache' | null>(null)
+
+function initiateAction(action: 'retry' | 'clearCache') {
+  currentAction.value = action
+  if (action === 'retry') {
+    confirmTitle.value = t('task.retryTask'); confirmMessage.value = t('task.confirmRetry'); confirmType.value = 'info'
+  } else if (action === 'clearCache') {
+    confirmTitle.value = t('task.clearCache'); confirmMessage.value = t('task.confirmClearCache'); confirmType.value = 'danger'
+  }
+  showConfirm.value = true
+}
+
+async function executeAction() {
+  if (!currentAction.value) return
+  actionLoading.value = true
+  try {
+    if (currentAction.value === 'retry') {
+      await taskStore.retryTask(taskId.value); await refreshTask(); startPolling();
+    } else if (currentAction.value === 'clearCache') {
+      await taskStore.clearTaskCache(taskId.value); await refreshTask();
+    }
+  } catch (err: any) { error.value = err.message || 'Action failed' } 
+  finally { actionLoading.value = false; currentAction.value = null }
+}
+
 onMounted(async () => {
   await refreshTask()
   if (task.value && ['pending', 'processing'].includes(task.value.status)) startPolling()
@@ -285,7 +279,7 @@ onUnmounted(() => { if (stopPolling) stopPolling() })
 .tab-btn { @apply text-xs px-3 py-1 rounded transition-all text-gray-500 font-medium; }
 .tab-btn.active { @apply bg-white text-gray-900 shadow-sm; }
 .custom-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
-.custom-scrollbar::-webkit-scrollbar-track { background: #f9fafb; }
-.custom-scrollbar::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 4px; }
+.custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+.custom-scrollbar::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 4px; border: 2px solid transparent; background-clip: content-box;}
 .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
 </style>
