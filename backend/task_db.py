@@ -9,6 +9,9 @@ MinerU Tianshu - SQLite Task Database Manager
     - Redis (可选): 高性能任务队列、优先级调度
     - 当 Redis 可用时，队列操作由 Redis 处理
     - 当 Redis 不可用时，自动回退到 SQLite
+
+更新日志:
+    - [新增] data 字段支持，用于存储 json_content 和 pdf_path 等扩展元数据
 """
 
 import sqlite3
@@ -138,6 +141,14 @@ class TaskDB:
                 cursor.execute("ALTER TABLE tasks ADD COLUMN user_id TEXT")
                 logger.info("✅ user_id field added")
 
+            # 迁移：添加 data 字段（如果不存在）- 用于存储 pdf_path, json_content 等
+            try:
+                cursor.execute("SELECT data FROM tasks LIMIT 1")
+            except sqlite3.OperationalError:
+                logger.info("📊 Migrating database schema: adding data field")
+                cursor.execute("ALTER TABLE tasks ADD COLUMN data TEXT")
+                logger.info("✅ data field added")
+
     def create_task(
         self,
         file_name: str,
@@ -149,17 +160,6 @@ class TaskDB:
     ) -> str:
         """
         创建新任务
-
-        Args:
-            file_name: 文件名
-            file_path: 文件路径
-            backend: 处理后端 (pipeline/vlm-transformers/vlm-vllm-engine)
-            options: 处理选项 (dict)
-            priority: 优先级，数字越大越优先
-            user_id: 用户ID (可选,用于权限控制)
-
-        Returns:
-            task_id: 任务ID
         """
         task_id = str(uuid.uuid4())
         with self.get_cursor() as cursor:
@@ -184,17 +184,7 @@ class TaskDB:
         return task_id
 
     def _enqueue_to_redis(self, task_id: str, priority: int, task_data: dict = None) -> bool:
-        """
-        将任务加入 Redis 队列
-
-        Args:
-            task_id: 任务ID
-            priority: 优先级
-            task_data: 可选的任务快照数据
-
-        Returns:
-            bool: 是否成功入队到 Redis
-        """
+        """将任务加入 Redis 队列"""
         if not REDIS_QUEUE_AVAILABLE:
             return False
 
@@ -209,13 +199,6 @@ class TaskDB:
     def get_next_task(self, worker_id: str, max_retries: int = 3) -> Optional[Dict]:
         """
         获取下一个待处理任务（原子操作，防止并发冲突）
-
-        Args:
-            worker_id: Worker ID
-            max_retries: 当任务被其他 worker 抢走时的最大重试次数（默认3次）
-
-        Returns:
-            task: 任务字典，如果没有任务返回 None
         """
         from loguru import logger
 
@@ -339,37 +322,46 @@ class TaskDB:
             return None
 
     def update_task_status(
-        self, task_id: str, status: str, result_path: str = None, error_message: str = None, worker_id: str = None
+        self,
+        task_id: str,
+        status: str,
+        result_path: str = None,
+        error_message: str = None,
+        worker_id: str = None,
+        data: str = None,  # 新增：接收扩展数据（JSON字符串）
     ):
         """
-        更新任务状态（使用预定义 SQL 模板，防止 SQL 注入）
+        更新任务状态
         """
         with self.get_cursor() as cursor:
             success = False
 
             # 根据不同状态使用预定义的 SQL 模板
             if status == "completed":
+                # 修复：写入 data 字段
                 if worker_id:
                     sql = """
                         UPDATE tasks
                         SET status = ?,
                             completed_at = CURRENT_TIMESTAMP,
-                            result_path = ?
+                            result_path = ?,
+                            data = ?
                         WHERE task_id = ?
                         AND status = 'processing'
                         AND worker_id = ?
                     """
-                    cursor.execute(sql, (status, result_path, task_id, worker_id))
+                    cursor.execute(sql, (status, result_path, data, task_id, worker_id))
                 else:
                     sql = """
                         UPDATE tasks
                         SET status = ?,
                             completed_at = CURRENT_TIMESTAMP,
-                            result_path = ?
+                            result_path = ?,
+                            data = ?
                         WHERE task_id = ?
                         AND status = 'processing'
                     """
-                    cursor.execute(sql, (status, result_path, task_id))
+                    cursor.execute(sql, (status, result_path, data, task_id))
 
                 success = cursor.rowcount > 0
 
