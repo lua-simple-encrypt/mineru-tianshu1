@@ -207,10 +207,10 @@
               <td class="px-6 py-4 whitespace-nowrap">
                 <StatusBadge :status="task.status" />
                 <div v-if="task.result_path === 'CLEARED'" class="mt-1">
-                   <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-500">
-                     <Eraser class="w-3 h-3 mr-1" />
-                     {{ $t('status.cleared') }}
-                   </span>
+                    <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-500">
+                      <Eraser class="w-3 h-3 mr-1" />
+                      {{ $t('status.cleared') }}
+                    </span>
                 </div>
               </td>
               <td class="px-6 py-4 whitespace-nowrap">
@@ -533,6 +533,8 @@ function confirmClearFailed() {
     currentActionType.value = 'clearFailed'
     try {
       await taskStore.clearFailedTasks()
+      // 强制重新加载列表，并重置到第一页
+      currentPage.value = 1
       await refreshTasks(true) 
     } finally {
       actionLoading.value = false
