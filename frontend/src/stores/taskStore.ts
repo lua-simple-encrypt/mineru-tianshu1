@@ -4,7 +4,8 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { taskApi } from '@/api'
-import type { Task, SubmitTaskRequest, TaskQueryParams } from '@/api/types'
+// ✅ 修复：导入 TaskStatus 类型
+import type { Task, SubmitTaskRequest, TaskQueryParams, TaskStatus } from '@/api/types'
 
 export const useTaskStore = defineStore('task', () => {
   // ----------------------------------------------------------------
@@ -219,8 +220,9 @@ export const useTaskStore = defineStore('task', () => {
 
   /**
    * 辅助：更新本地任务状态
+   * ✅ 修复：将 status 参数类型从 string 改为 TaskStatus
    */
-  function updateLocalTaskStatus(taskId: string, status: string) {
+  function updateLocalTaskStatus(taskId: string, status: TaskStatus) {
     const task = tasks.value.find(t => t.task_id === taskId)
     if (task) task.status = status
     if (currentTask.value?.task_id === taskId) currentTask.value.status = status
@@ -255,6 +257,13 @@ export const useTaskStore = defineStore('task', () => {
     return () => { stopped = true; if (timerId) clearTimeout(timerId) }
   }
 
+  /**
+   * 清空错误
+   */
+  function clearError() {
+    error.value = null
+  }
+
   function reset() {
     tasks.value = []
     total.value = 0
@@ -277,11 +286,11 @@ export const useTaskStore = defineStore('task', () => {
     fetchTaskStatus,
     fetchTasks,
     cancelTask,
-    retryTask,      // ✅ 新增
-    pauseTask,      // ✅ 新增
-    resumeTask,     // ✅ 新增
-    clearTaskCache, // ✅ 新增
-    clearFailedTasks,// ✅ 新增
+    retryTask,      
+    pauseTask,      
+    resumeTask,     
+    clearTaskCache, 
+    clearFailedTasks,
     pollTaskStatus,
     clearError,
     reset
