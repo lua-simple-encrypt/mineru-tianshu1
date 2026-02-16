@@ -12,8 +12,8 @@ import json
 import os
 import re
 import uuid
-import shutil  # ✅ [新增] 用于删除非空目录
-import mimetypes  # ✅ [新增] 用于自动识别文件类型
+import shutil  # ✅ 用于删除非空目录
+import mimetypes  # ✅ 用于自动识别文件类型
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -24,7 +24,7 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query, Depen
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from loguru import logger
-from starlette.types import ASGIApp, Receive, Scope, Send  # ✅ 新增：用于底层中间件
+from starlette.types import ASGIApp, Receive, Scope, Send  # ✅ 用于底层中间件
 
 # 导入认证模块
 from auth import (
@@ -137,45 +137,28 @@ logger.info(f"📁 Upload directory: {UPLOAD_DIR}")
 
 
 # 注意：此函数已废弃，Worker 已自动上传图片到 RustFS 并替换 URL
-# 保留此函数仅用于向后兼容（处理旧任务或 RustFS 失败的情况）
 def process_markdown_images_legacy(md_content: str, image_dir: Path, result_path: str):
     """
     【向后兼容】处理 Markdown 中的图片引用
-
-    Worker 已自动上传图片到 RustFS 并替换 URL，此函数仅用于向后兼容。
-    如果检测到图片路径不是 URL，则转换为本地静态文件服务 URL。
     """
-    # 检查是否已经包含 RustFS URL
     if "http://" in md_content or "https://" in md_content:
-        logger.debug("✅ Markdown already contains URLs (RustFS uploaded)")
         return md_content
 
-    # 如果没有图片目录，直接返回
     if not image_dir.exists():
-        logger.debug("ℹ️  No images directory, skipping processing")
         return md_content
-
-    # 兼容模式：转换相对路径为本地 URL
-    logger.warning("⚠️  Images not uploaded to RustFS, using local URLs (legacy mode)")
 
     def replace_image_path(match):
-        """替换图片路径为本地 URL"""
         full_match = match.group(0)
-        # 提取图片路径（Markdown 或 HTML）
         if "![" in full_match:
-            # Markdown: ![alt](path)
             image_path = match.group(2)
             alt_text = match.group(1)
         else:
-            # HTML: <img src="path">
             image_path = match.group(2)
             alt_text = "Image"
 
-        # 如果已经是 URL，跳过
         if image_path.startswith("http"):
             return full_match
 
-        # 生成本地静态文件 URL
         try:
             image_filename = Path(image_path).name
             output_dir_str = str(OUTPUT_DIR).replace("\\", "/")
@@ -183,14 +166,11 @@ def process_markdown_images_legacy(md_content: str, image_dir: Path, result_path
 
             if result_path_str.startswith(output_dir_str):
                 relative_path = result_path_str[len(output_dir_str) :].lstrip("/")
-                # ✅ [修复] url 编码需保留正斜杠，防止 404
                 encoded_relative_path = quote(relative_path, safe="/")
                 encoded_filename = quote(image_filename, safe="/")
                 
-                # 统一使用 /api/v1 前缀，稍后通过 Router 注册兼容 Nginx
                 static_url = f"/api/v1/files/output/{encoded_relative_path}/images/{encoded_filename}"
 
-                # 返回替换后的内容
                 if "![" in full_match:
                     return f"![{alt_text}]({static_url})"
                 else:
@@ -201,15 +181,13 @@ def process_markdown_images_legacy(md_content: str, image_dir: Path, result_path
         return full_match
 
     try:
-        # 匹配 Markdown 和 HTML 图片
         md_pattern = r"!\[([^\]]*)\]\(([^)]+)\)"
         html_pattern = r'<img\s+([^>]*\s+)?src="([^"]+)"([^>]*)>'
 
         new_content = re.sub(md_pattern, replace_image_path, md_content)
         new_content = re.sub(html_pattern, replace_image_path, new_content)
         return new_content
-    except Exception as e:
-        logger.error(f"❌ Failed to process images: {e}")
+    except Exception:
         return md_content
 
 
@@ -244,16 +222,11 @@ async def submit_task(
     table_enable: bool = Form(True, description="是否启用表格识别"),
     priority: int = Form(0, description="优先级，数字越大越优先"),
     
-    # === 新增参数 ===
     start_page: Optional[int] = Form(None, description="起始页码（从0开始）"),
     end_page: Optional[int] = Form(None, description="结束页码"),
-    # force_ocr 保留兼容，但建议使用 method='ocr'
     force_ocr: bool = Form(False, description="[兼容旧版] 是否强制使用OCR"),
-    
-    # 远程服务参数
     server_url: Optional[str] = Form(None, description="远程服务器地址 (仅 Client 模式需要)"),
 
-    # MinerU 详细调试/输出选项 (对应前端 Advanced Settings)
     draw_layout_bbox: bool = Form(True, description="绘制布局边框 (_layout.pdf)"),
     draw_span_bbox: bool = Form(True, description="绘制文本边框 (_span.pdf)"),
     dump_markdown: bool = Form(True, description="输出 Markdown"),
@@ -261,34 +234,20 @@ async def submit_task(
     dump_model_output: bool = Form(True, description="输出模型原始数据"),
     dump_content_list: bool = Form(True, description="输出内容列表"),
     dump_orig_pdf: bool = Form(True, description="保存原始/截取 PDF"),
-    
-    # 旧版参数兼容 (Worker 会做映射)
     draw_layout: bool = Form(True, description="[兼容旧版] 是否绘制布局边框"),
     draw_span: bool = Form(True, description="[兼容旧版] 是否绘制文本Span边框"),
     
-    # 视频处理专用参数
     keep_audio: bool = Form(False, description="视频处理时是否保留提取的音频文件"),
     enable_keyframe_ocr: bool = Form(False, description="是否启用视频关键帧OCR识别（实验性功能）"),
     ocr_backend: str = Form("paddleocr-vl", description="关键帧OCR引擎: paddleocr-vl"),
     keep_keyframes: bool = Form(False, description="是否保留提取的关键帧图像"),
     
-    # 音频处理专用参数
-    enable_speaker_diarization: bool = Form(
-        False, description="是否启用说话人分离（音频多说话人识别，需要额外下载 Paraformer 模型）"
-    ),
-    
-    # 水印去除专用参数
-    remove_watermark: bool = Form(False, description="是否启用水印去除（支持 PDF/图片）"),
-    watermark_conf_threshold: float = Form(0.35, description="水印检测置信度阈值（0.0-1.0，推荐 0.35）"),
-    watermark_dilation: int = Form(10, description="水印掩码膨胀大小（像素，推荐 10）"),
-    
-    # Office 文件转 PDF 参数
-    convert_office_to_pdf: bool = Form(
-        False,
-        description="是否将 Office 文件转换为 PDF 后再处理（图片提取更完整，但速度较慢）"
-    ),
+    enable_speaker_diarization: bool = Form(False, description="是否启用说话人分离"),
+    remove_watermark: bool = Form(False, description="是否启用水印去除"),
+    watermark_conf_threshold: float = Form(0.35, description="水印检测置信度阈值"),
+    watermark_dilation: int = Form(10, description="水印掩码膨胀大小"),
+    convert_office_to_pdf: bool = Form(False, description="是否将 Office 文件转换为 PDF 后再处理"),
 
-    # === PaddleOCR 专属参数 ===
     useDocOrientationClassify: bool = Form(False, description="文档方向分类"),
     useDocUnwarping: bool = Form(False, description="文档去弯曲"),
     useLayoutDetection: bool = Form(True, description="是否启用版面分析"),
@@ -308,26 +267,19 @@ async def submit_task(
     restructurePages: bool = Form(True, description="是否重构页面"),
     markdownIgnoreLabels: str = Form("header,header_image,footer,footer_image,number,footnote,aside_text", description="忽略的标签 (逗号分隔)"),
     
-    # 认证依赖
     current_user: User = Depends(require_permission(Permission.TASK_SUBMIT)),
 ):
-    """
-    提交文档解析任务
-    """
     try:
-        # 生成唯一的文件名（避免冲突）
         unique_filename = f"{uuid.uuid4().hex}_{file.filename}"
         temp_file_path = UPLOAD_DIR / unique_filename
 
-        # 流式写入文件到磁盘，避免高内存使用
         with open(temp_file_path, "wb") as temp_file:
             while True:
-                chunk = await file.read(1 << 23)  # 8MB chunks
+                chunk = await file.read(1 << 23)
                 if not chunk:
                     break
                 temp_file.write(chunk)
 
-        # 构建处理选项
         options = {
             "lang": lang,
             "method": method,
@@ -355,8 +307,6 @@ async def submit_task(
             "watermark_conf_threshold": watermark_conf_threshold,
             "watermark_dilation": watermark_dilation,
             "convert_office_to_pdf": convert_office_to_pdf,
-
-            # === PaddleOCR 专属参数 ===
             "useDocOrientationClassify": useDocOrientationClassify,
             "useDocUnwarping": useDocUnwarping,
             "useLayoutDetection": useLayoutDetection,
@@ -377,10 +327,8 @@ async def submit_task(
             "markdownIgnoreLabels": [label.strip() for label in markdownIgnoreLabels.split(",") if label.strip()],
         }
 
-        # ✅ [修复 Bug 3]：自动检测环境变量开启 RustFS，默认传递给 Worker
         options["upload_images"] = os.getenv("RUSTFS_ENABLED", "true").lower() == "true"
 
-        # 创建任务
         task_id = db.create_task(
             file_name=file.filename,
             file_path=str(temp_file_path),
@@ -413,26 +361,20 @@ async def get_task_status(
     format: str = Query("markdown", description="返回格式: markdown(默认)/json/both"),
     current_user: User = Depends(get_current_active_user),
 ):
-    """
-    查询任务状态和详情
-    """
     task = db.get_task(task_id)
 
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    # 权限检查
     if not current_user.has_permission(Permission.TASK_VIEW_ALL):
         if task.get("user_id") != current_user.user_id:
             raise HTTPException(status_code=403, detail="Permission denied: You can only view your own tasks")
 
-    # === 构建源文件访问 URL ===
     source_url = None
     if task.get("file_path"):
         try:
             source_filename = Path(task["file_path"]).name
             encoded_source_filename = quote(source_filename)
-            # 始终返回完整路径 /api/v1/... 前端使用方便
             source_url = f"/api/v1/files/upload/{encoded_source_filename}"
         except Exception as e:
             logger.warning(f"Failed to generate source_url: {e}")
@@ -455,7 +397,6 @@ async def get_task_status(
     if not task.get("is_parent"):
         response["worker_id"] = task.get("worker_id")
         response["retry_count"] = task.get("retry_count")
-        # 兼容新增的 cleared 字段
         response["result_path"] = task.get("result_path")
 
     if task.get("is_parent"):
@@ -479,7 +420,7 @@ async def get_task_status(
                 for child in children
             ]
         except Exception as e:
-            logger.warning(f"⚠️  Failed to load subtasks: {e}")
+            pass
 
     if task["status"] == "completed":
         if not task["result_path"] or task["result_path"] == "CLEARED":
@@ -527,14 +468,7 @@ async def get_task_status(
                              pass
 
                     if format in ["markdown", "both"] and md_files:
-                        md_file = None
-                        for f in md_files:
-                            if f.name == "result.md":
-                                md_file = f
-                                break
-                        if not md_file:
-                            md_file = md_files[0]
-
+                        md_file = next((f for f in md_files if f.name == "result.md"), md_files[0])
                         image_dir = md_file.parent / "images"
                         with open(md_file, "r", encoding="utf-8") as f:
                             md_content = f.read()
@@ -554,8 +488,8 @@ async def get_task_status(
                                 json_content = json_lib.load(f)
                             response["data"]["json_file"] = json_file.name
                             response["data"]["json_content"] = json_content
-                        except Exception as json_e:
-                            logger.warning(f"⚠️  Failed to load JSON: {json_e}")
+                        except Exception:
+                            pass
                     elif format == "json" and not json_files:
                         response["data"]["message"] = "JSON format not available for this backend"
 
@@ -571,38 +505,85 @@ async def get_task_status(
     return response
 
 
+# ========================================================================
+# 🚨 终极修复：物理清理任务接口（解决清理失败、任务依然存在问题）
+# ========================================================================
+
 @router.delete("/tasks/{task_id}", tags=["任务管理"])
-async def cancel_task(task_id: str, current_user: User = Depends(get_current_active_user)):
+async def delete_task(task_id: str, current_user: User = Depends(get_current_active_user)):
     """
-    取消任务（仅限 pending 状态）
+    【重构】彻底删除任务及其本地文件
+    不仅取消 pending 的任务，还会物理抹除文件和数据库记录。
     """
     task = db.get_task(task_id)
 
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    # 权限检查
     if not current_user.has_permission(Permission.TASK_DELETE_ALL):
         if task.get("user_id") != current_user.user_id:
-            raise HTTPException(status_code=403, detail="Permission denied: You can only cancel your own tasks")
+            raise HTTPException(status_code=403, detail="Permission denied: You can only delete your own tasks")
 
-    if task["status"] == "pending":
-        db.update_task_status(task_id, "cancelled")
-        # 尝试清理上传的文件（可选）
-        if task.get("file_path"):
-            file_path = Path(task["file_path"])
-            if file_path.exists():
+    # 1. 物理删除 Output 文件夹
+    output_dir = OUTPUT_DIR / task_id
+    if output_dir.exists():
+        shutil.rmtree(output_dir, ignore_errors=True)
+
+    # 2. 物理删除 Upload 的源文件
+    if task.get("file_path"):
+        file_path = Path(task["file_path"])
+        if file_path.exists():
+            try:
+                file_path.unlink()
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to delete source file: {e}")
+
+    # 3. 从数据库彻底移除记录
+    with db.get_cursor() as cursor:
+        cursor.execute("DELETE FROM tasks WHERE task_id = ?", (task_id,))
+
+    logger.info(f"🗑️ Task completely deleted: {task_id} by user {current_user.username}")
+    return {"success": True, "message": "Task and files completely deleted."}
+
+
+@router.delete("/tasks/failed/clear", tags=["任务管理"])
+async def clear_failed_tasks_endpoint(current_user: User = Depends(require_permission(Permission.TASK_DELETE_ALL))):
+    """
+    【重构】一键清理所有失败的任务，包含物理清除文件
+    """
+    with db.get_cursor() as cursor:
+        # 获取所有失败的任务信息
+        cursor.execute("SELECT task_id, file_path FROM tasks WHERE status = 'failed'")
+        failed_tasks = [dict(row) for row in cursor.fetchall()]
+        
+        deleted_count = 0
+        for task in failed_tasks:
+            t_id = task.get("task_id")
+            f_path = task.get("file_path")
+            
+            # 删除 Output 文件夹
+            output_dir = OUTPUT_DIR / t_id
+            if output_dir.exists():
+                shutil.rmtree(output_dir, ignore_errors=True)
+            
+            # 删除上传的源文件
+            if f_path and Path(f_path).exists():
                 try:
-                    file_path.unlink()
+                    Path(f_path).unlink()
                 except Exception:
                     pass
-        logger.info(f"⏹️  Task cancelled: {task_id} by user {current_user.username}")
-        return {"success": True, "message": "Task cancelled successfully"}
-    else:
-        raise HTTPException(status_code=400, detail=f"Cannot cancel task in {task['status']} status")
+            
+            # 从数据库中彻底删除
+            cursor.execute("DELETE FROM tasks WHERE task_id = ?", (t_id,))
+            deleted_count += 1
+
+    logger.info(f"🧹 Cleared {deleted_count} failed tasks from DB and Disk.")
+    return {"success": True, "deleted_count": deleted_count, "message": f"Successfully cleared {deleted_count} failed tasks."}
 
 
 # ========================================================================
-# 新增任务管理接口：重试、暂停/恢复、清理
+# 修复：重试与暂停权限报错 (TASK_MANAGE_ALL -> TASK_DELETE_ALL)
 # ========================================================================
 
 @router.post("/tasks/{task_id}/retry", tags=["任务管理"])
@@ -614,13 +595,12 @@ async def retry_task(task_id: str, current_user: User = Depends(get_current_acti
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
         
-    # 权限检查：只能重试自己的任务，或者是管理员
-    if not current_user.has_permission(Permission.TASK_MANAGE_ALL):
+    # 🚨 修复属性名称错误
+    if not current_user.has_permission(Permission.TASK_DELETE_ALL):
          if task.get("user_id") != current_user.user_id:
             raise HTTPException(status_code=403, detail="Permission denied")
 
     if db.retry_task(task_id):
-        # 重试时，如果之前的输出目录存在，清理掉避免数据混淆
         output_dir = OUTPUT_DIR / task_id
         if output_dir.exists():
             try:
@@ -633,27 +613,17 @@ async def retry_task(task_id: str, current_user: User = Depends(get_current_acti
     raise HTTPException(status_code=404, detail="Task not found")
 
 
-@router.delete("/tasks/failed/clear", tags=["任务管理"])
-async def clear_failed_tasks_endpoint(current_user: User = Depends(require_permission(Permission.TASK_DELETE_ALL))):
-    """
-    一键清理所有失败的任务 (仅管理员可用，防止普通用户误删)
-    """
-    # 1. 数据库层面清理
-    deleted_count = db.clear_failed_tasks()
-    
-    return {"success": True, "deleted_count": deleted_count}
-
-
 @router.post("/tasks/{task_id}/pause", tags=["任务管理"])
 async def pause_task_endpoint(task_id: str, current_user: User = Depends(get_current_active_user)):
     """
-    暂停任务 (仅 Pending 状态有效)
+    暂停任务
     """
     task = db.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
         
-    if not current_user.has_permission(Permission.TASK_MANAGE_ALL):
+    # 🚨 修复属性名称错误
+    if not current_user.has_permission(Permission.TASK_DELETE_ALL):
          if task.get("user_id") != current_user.user_id:
             raise HTTPException(status_code=403, detail="Permission denied")
 
@@ -666,13 +636,14 @@ async def pause_task_endpoint(task_id: str, current_user: User = Depends(get_cur
 @router.post("/tasks/{task_id}/resume", tags=["任务管理"])
 async def resume_task_endpoint(task_id: str, current_user: User = Depends(get_current_active_user)):
     """
-    恢复任务 (仅 Paused 状态有效)
+    恢复任务
     """
     task = db.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
         
-    if not current_user.has_permission(Permission.TASK_MANAGE_ALL):
+    # 🚨 修复属性名称错误
+    if not current_user.has_permission(Permission.TASK_DELETE_ALL):
          if task.get("user_id") != current_user.user_id:
             raise HTTPException(status_code=403, detail="Permission denied")
 
@@ -685,27 +656,23 @@ async def resume_task_endpoint(task_id: str, current_user: User = Depends(get_cu
 @router.post("/tasks/{task_id}/clear-cache", tags=["任务管理"])
 async def clear_task_cache_endpoint(task_id: str, current_user: User = Depends(get_current_active_user)):
     """
-    清理任务缓存：删除 output 文件夹，保留数据库记录
+    清理任务缓存：仅删除 output 文件夹
     """
     task = db.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     
-    # 权限检查：只能清理自己的任务，或者是管理员
     if not current_user.has_permission(Permission.TASK_DELETE_ALL):
          if task.get("user_id") != current_user.user_id:
             raise HTTPException(status_code=403, detail="Permission denied")
 
-    # 1. 删除磁盘文件
     output_dir = OUTPUT_DIR / task_id
     if output_dir.exists():
         try:
             shutil.rmtree(output_dir)
         except Exception as e:
-            # 如果删除失败（例如权限问题），返回 500
             raise HTTPException(status_code=500, detail=f"Failed to delete files: {str(e)}")
     
-    # 2. 更新数据库状态
     if db.clear_task_cache(task_id):
         return {"success": True, "message": "Task cache cleared, space freed"}
     
@@ -714,9 +681,6 @@ async def clear_task_cache_endpoint(task_id: str, current_user: User = Depends(g
 
 @router.get("/queue/stats", tags=["队列管理"])
 async def get_queue_stats(current_user: User = Depends(require_permission(Permission.QUEUE_VIEW))):
-    """
-    获取队列统计信息
-    """
     stats = db.get_queue_stats()
     return {
         "success": True,
@@ -737,9 +701,6 @@ async def list_tasks(
     search: Optional[str] = Query(None, description="搜索文件名或任务ID"), 
     current_user: User = Depends(get_current_active_user),
 ):
-    """
-    获取任务列表
-    """
     can_view_all = current_user.has_permission(Permission.TASK_VIEW_ALL)
     conditions = []
     params = []
@@ -795,9 +756,6 @@ async def cleanup_old_tasks(
     days: int = Query(7, description="清理N天前的任务"),
     current_user: User = Depends(require_permission(Permission.QUEUE_MANAGE)),
 ):
-    """
-    清理旧任务（管理接口）
-    """
     deleted_count = db.cleanup_old_task_records(days)
     logger.info(f"🧹 Cleaned up {deleted_count} old tasks by {current_user.username}")
     return {
@@ -812,9 +770,6 @@ async def reset_stale_tasks(
     timeout_minutes: int = Query(60, description="超时时间（分钟）"),
     current_user: User = Depends(require_permission(Permission.QUEUE_MANAGE)),
 ):
-    """
-    重置超时的 processing 任务（管理接口）
-    """
     reset_count = db.reset_stale_tasks(timeout_minutes)
     logger.info(f"🔄 Reset {reset_count} stale tasks by {current_user.username}")
     return {
@@ -826,9 +781,6 @@ async def reset_stale_tasks(
 
 @router.get("/engines", tags=["系统信息"])
 async def list_engines():
-    """
-    列出所有可用的处理引擎
-    """
     engines = {
         "document": [
             {
@@ -905,9 +857,6 @@ async def list_engines():
 
 @router.get("/health", tags=["系统信息"])
 async def health_check():
-    """
-    健康检查接口
-    """
     try:
         stats = db.get_queue_stats()
         return {
@@ -921,31 +870,22 @@ async def health_check():
         return JSONResponse(status_code=503, content={"status": "unhealthy", "error": str(e)})
 
 
-# ============================================================================
-# 自定义文件服务（统一接口，支持 URL 编码与 MIME 识别）
-# ============================================================================
 @router.get("/files/output/{file_path:path}", tags=["文件服务"])
 async def serve_output_file(file_path: str):
     """提供输出文件的访问服务"""
     try:
-        # 解码并移除开头的斜杠，防止 double slash 或 encoding 问题
         decoded_path = unquote(file_path).lstrip("/")
-        
-        # 拼接完整路径
         full_path = (OUTPUT_DIR / decoded_path).resolve()
         
         logger.debug(f"📥 Serving output file: {full_path}")
 
-        # 防止目录穿越
         if not full_path.is_relative_to(OUTPUT_DIR.resolve()) or not full_path.is_file():
             logger.warning(f"❌ Access denied or file not found: {full_path}")
             raise HTTPException(status_code=404, detail="File not found or access denied")
 
-        # 自动猜测 MIME 类型
         media_type, _ = mimetypes.guess_type(full_path)
         media_type = media_type or "application/octet-stream"
 
-        # ✅ [修复 Bug 4] 强制浏览器内联预览 (inline)，不使用 filename 参数以免触发 attachment 下载
         headers = {
             "Content-Disposition": f"inline; filename*=utf-8''{quote(full_path.name)}"
         }
@@ -967,24 +907,18 @@ async def serve_output_file(file_path: str):
 async def serve_upload_file(file_path: str):
     """提供上传源文件的访问服务"""
     try:
-        # 解码并移除开头的斜杠
         decoded_path = unquote(file_path).lstrip("/")
-        
-        # 拼接完整路径
         full_path = (UPLOAD_DIR / decoded_path).resolve()
         
         logger.debug(f"📥 Serving upload file: {full_path}")
 
-        # 防止目录穿越
         if not full_path.is_relative_to(UPLOAD_DIR.resolve()) or not full_path.is_file():
             logger.warning(f"❌ Access denied or file not found: {full_path}")
             raise HTTPException(status_code=404, detail="File not found or access denied")
 
-        # 自动猜测 MIME 类型
         media_type, _ = mimetypes.guess_type(full_path)
         media_type = media_type or "application/octet-stream"
 
-        # ✅ [修复 Bug 4] 强制浏览器内联预览 (inline)，不使用 filename 参数以免触发 attachment 下载
         headers = {
             "Content-Disposition": f"inline; filename*=utf-8''{quote(full_path.name)}"
         }
@@ -1002,17 +936,12 @@ async def serve_upload_file(file_path: str):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-# ============================================================================
-# 注册底层路由
-# ============================================================================
-# 因为有了 ASGI 中间件自动补全 /api 前缀，这里只需挂载一份标准的 /api/v1 即可完美工作！
 app.include_router(router, prefix="/api/v1")
 
 logger.info(f"📁 File service mounted: /api/v1/files/output -> {OUTPUT_DIR}")
 logger.info(f"📁 File service mounted: /api/v1/files/upload -> {UPLOAD_DIR}")
 
 if __name__ == "__main__":
-    # 从环境变量读取端口，默认为8000
     api_port = int(os.getenv("API_PORT", "8000"))
 
     logger.info("🚀 Starting MinerU Tianshu API Server...")
