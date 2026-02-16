@@ -127,6 +127,7 @@ const scrollTop = ref(0)
 const containerHeight = ref(0)
 const totalPages = ref(0)
 const scale = ref(1.5)
+let lastWidth = 0 // 记录上一次的宽度，防止高度引起的无效重绘
 
 // Highlight State
 const highlight = ref<{ pageIndex: number; bbox: number[] } | null>(null)
@@ -150,7 +151,6 @@ const PAGE_GAP = 16
 const currentPage = computed(() => {
   if (!pagesMetaData.value.length) return 0
   const center = scrollTop.value + (containerHeight.value / 2)
-  // 使用 find 查找中心点所在的页面
   const page = pagesMetaData.value.find(p => center >= p.top && center <= (p.top + p.height + PAGE_GAP))
   return page ? page.index : 1
 })
@@ -172,23 +172,18 @@ const layoutDataMap = computed(() => {
 const visiblePages = computed(() => {
   if (pagesMetaData.value.length === 0) return []
   
-  // 预加载视口上下各 1 屏的高度，提升快速滚动体验
-  const startY = scrollTop.value - containerHeight.value 
-  const endY = scrollTop.value + containerHeight.value * 2 
+  // 预加载视口上下各 1.5 屏的高度，提升快速滚动体验
+  const startY = scrollTop.value - containerHeight.value * 1.5
+  const endY = scrollTop.value + containerHeight.value * 2.5 
   
   const result = []
   
-  // 优化：因为 pagesMetaData 是按 top 排序的，可以使用循环并在超出范围后 break
+  // 因为 pagesMetaData 是按 top 排序的，可以使用循环并在超出范围后 break
   for (const page of pagesMetaData.value) {
     const pageBottom = page.top + page.height
-    
-    // 如果页面完全在视口上方，跳过
     if (pageBottom < startY) continue
-    
-    // 如果页面顶部已经在视口下方，说明后续页面都在下方，直接中断循环
     if (page.top > endY) break
     
-    // 在视口范围内
     result.push({
       ...page,
       rendered: renderedPages.has(page.index)
@@ -201,7 +196,6 @@ const visiblePages = computed(() => {
 // --- Watchers ---
 
 // 资源回收：当页面移出视口时，取消渲染任务并移除缓存状态
-// 这是解决“滚回去白屏”的关键逻辑
 watch(visiblePages, (newPages, oldPages) => {
   if (!oldPages) return;
   
@@ -275,23 +269,32 @@ const loadPdf = async (url: string) => {
 
 const initLayout = async () => {
   if (!pdfDoc.value || !containerRef.value) return
+  
+  const containerW = containerRef.value.clientWidth
+  // 🚨【关键修复】：防止因页面尚未完全挂载（display:none 或外层未渲染完）导致 clientWidth 为 0 造成的白屏
+  if (containerW <= 0) {
+    setTimeout(() => {
+      if (pdfDoc.value) initLayout()
+    }, 100)
+    return
+  }
+
   processing.value = true
   
-  // 关键：在重新计算布局（例如 Resize）时，必须清除旧的渲染状态
+  // 重新计算布局时，必须清除旧的渲染状态
   renderedPages.clear()
   renderTasks.forEach(t => t.cancel())
   renderTasks.clear()
   
   try {
     containerHeight.value = containerRef.value.clientHeight
-    const containerW = containerRef.value.clientWidth
+    lastWidth = containerW
     
     // 获取第一页以计算缩放比例
     const page1 = await pdfDoc.value.getPage(1)
     const viewport = page1.getViewport({ scale: 1 })
     
-    // 留出 32px (左右 padding) + 滚动条空间
-    // 限制最大宽度，防止在大屏上过大
+    // 留出 32px (左右 padding) + 滚动条空间，限制最大宽度
     const targetWidth = Math.min(containerW - 32, 1200) 
     const fitScale = targetWidth / viewport.width
     scale.value = fitScale
@@ -326,13 +329,13 @@ const initLayout = async () => {
 const renderPage = async (canvas: HTMLCanvasElement | null, pageMeta: any) => {
   if (!canvas || !pdfDoc.value) return
   
-  // 检查：如果已经渲染过，且 DOM 没有被重置（Canvas 宽度未丢失），则跳过
-  // 只有当 canvas.width 为默认值 (300) 或 0 时才说明它是新创建/重置的
-  const isCanvasClear = canvas.width === 0 || canvas.width === 300 
-  if (!isCanvasClear && renderedPages.has(pageMeta.index)) return
-  if (renderTasks.has(pageMeta.index)) return
+  // 防御性：避免同一个 Canvas 触发多次不必要的渲染
+  if (renderedPages.has(pageMeta.index) || renderTasks.has(pageMeta.index)) return
 
   try {
+    // 立即标记占位，防止 Vue 生命周期并发调用
+    renderedPages.add(pageMeta.index)
+    
     const page = await pdfDoc.value.getPage(pageMeta.index)
     
     const dpr = window.devicePixelRatio || 1
@@ -350,16 +353,15 @@ const renderPage = async (canvas: HTMLCanvasElement | null, pageMeta: any) => {
     })
     
     renderTasks.set(pageMeta.index, renderTask)
-    
     await renderTask.promise
-    
-    renderedPages.add(pageMeta.index)
     renderTasks.delete(pageMeta.index)
+    
   } catch (err: any) {
-    // 忽略取消渲染的错误
     if (err.name !== 'RenderingCancelledException') {
       console.warn(`Page ${pageMeta.index} render warning:`, err)
     }
+    // 渲染失败或被取消时，移除标记以便下次重新渲染
+    renderedPages.delete(pageMeta.index)
   }
 }
 
@@ -429,10 +431,17 @@ let resizeObserver: ResizeObserver | null = null
 
 onMounted(() => {
   if (containerRef.value) {
-    // 使用防抖处理 Resize，提升性能
+    // 🚨【关键修复】：只有在宽度真正发生变化时才触发重绘，防止循环重绘
     const handleResize = debounce(() => {
-      if (!processing.value && pdfDoc.value) {
-         initLayout()
+      if (!containerRef.value) return
+      const currentWidth = containerRef.value.clientWidth
+      if (currentWidth > 0 && Math.abs(currentWidth - lastWidth) > 1) {
+        if (!processing.value && pdfDoc.value) {
+           initLayout()
+        }
+      } else if (currentWidth > 0) {
+        // 如果只是高度变化，仅更新高度参考值供滚动计算使用
+        containerHeight.value = containerRef.value.clientHeight
       }
     }, 200)
 
