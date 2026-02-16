@@ -1,13 +1,24 @@
 <template>
   <div class="relative w-full h-full flex flex-col bg-gray-200/50">
-    <div v-if="loading || processing" class="absolute top-0 left-0 w-full h-0.5 bg-gray-200 z-20">
-      <div class="h-full bg-blue-600 transition-all duration-300" :style="{ width: `${progress}%` }"></div>
+    <div v-if="loading || processing" class="absolute top-0 left-0 w-full h-1 bg-gray-200 z-50">
+      <div class="h-full bg-blue-600 transition-all duration-300 ease-out shadow-[0_0_10px_rgba(37,99,235,0.5)]" :style="{ width: `${progress}%` }"></div>
     </div>
 
-    <div v-if="error" class="absolute inset-0 flex flex-col items-center justify-center bg-white z-50 p-4 text-center">
-      <div class="text-red-500 font-bold mb-2">PDF 加载失败</div>
-      <div class="text-gray-500 text-xs break-all max-w-md">{{ error }}</div>
-      <button @click="retry" class="mt-4 px-3 py-1.5 bg-blue-50 text-blue-600 rounded hover:bg-blue-100 transition text-sm">
+    <div v-if="error" class="absolute inset-0 flex flex-col items-center justify-center bg-white z-50 p-6 text-center">
+      <div class="bg-red-50 p-4 rounded-full mb-3">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+        </svg>
+      </div>
+      <div class="text-gray-900 font-semibold text-lg mb-1">PDF 加载失败</div>
+      <div class="text-gray-500 text-xs break-all max-w-md bg-gray-50 p-2 rounded border border-gray-100">{{ error }}</div>
+      <button 
+        @click="retry" 
+        class="mt-6 px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition shadow-sm text-sm font-medium flex items-center"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.058M20.9 14.25a8.5 8.5 0 11-6.1-1.53M22 22v-5h-5" />
+        </svg>
         重试
       </button>
     </div>
@@ -36,8 +47,10 @@
             }"
           >
             <div v-if="!page.rendered" class="absolute inset-0 flex items-center justify-center bg-white z-10">
-              <div class="w-6 h-6 border-2 border-blue-100 border-t-blue-500 rounded-full animate-spin"></div>
-              <span class="ml-2 text-gray-400 text-xs font-mono">P.{{ page.index }}</span>
+              <div class="flex flex-col items-center">
+                <div class="w-8 h-8 border-3 border-blue-100 border-t-blue-600 rounded-full animate-spin mb-2"></div>
+                <span class="text-gray-400 text-xs font-mono font-medium">Page {{ page.index }}</span>
+              </div>
             </div>
             
             <canvas 
@@ -49,7 +62,7 @@
               <div
                 v-for="block in layoutDataMap[page.index]"
                 :key="block.id"
-                class="absolute cursor-pointer pointer-events-auto hover:bg-blue-500/10 hover:border-blue-500 border border-transparent transition-colors"
+                class="absolute cursor-pointer pointer-events-auto hover:bg-blue-600/10 hover:border-blue-500 border border-transparent transition-colors rounded-[1px]"
                 :style="getBlockStyle(block.bbox)"
                 @click.stop="emit('block-click', block)"
                 :title="`跳转到解析内容 (ID: ${block.id})`"
@@ -58,7 +71,7 @@
 
             <div 
               v-if="highlight && highlight.pageIndex === page.index"
-              class="absolute z-30 border-2 border-red-600 bg-red-500/30 animate-pulse pointer-events-none box-border"
+              class="absolute z-30 border-2 border-red-500 bg-red-500/20 animate-pulse pointer-events-none box-border rounded-[1px]"
               :style="getBlockStyle(highlight.bbox)"
             ></div>
 
@@ -67,8 +80,8 @@
       </div>
     </div>
     
-    <div v-if="!loading && totalPages > 0" class="absolute bottom-4 right-6 bg-black/60 text-white px-3 py-1 rounded-full text-xs backdrop-blur-sm z-30 font-mono shadow-lg pointer-events-none select-none">
-      {{ currentPage }} / {{ totalPages }}
+    <div v-if="!loading && totalPages > 0" class="absolute bottom-6 right-8 bg-gray-900/75 text-white px-3 py-1.5 rounded-md text-xs backdrop-blur-md z-30 font-mono shadow-lg pointer-events-none select-none border border-white/10">
+      {{ currentPage }} <span class="text-gray-400 mx-1">/</span> {{ totalPages }}
     </div>
   </div>
 </template>
@@ -81,6 +94,7 @@ import pdfWorker from 'pdfjs-dist/build/pdf.worker?url'
 // 设置 Worker 全局配置
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker
 
+// --- Types & Props ---
 const props = defineProps<{
   src: string | null
   layoutData?: any[] // [{id, page_idx, bbox: [x0,y0,x1,y1]}, ...]
@@ -92,17 +106,29 @@ const emit = defineEmits<{
   (e: 'page-loaded', total: number): void
 }>()
 
+// --- Utilities ---
+// 简单的防抖函数，避免 Resize 过于频繁
+function debounce<T extends (...args: any[]) => void>(fn: T, delay: number) {
+  let timeoutId: ReturnType<typeof setTimeout>
+  return (...args: Parameters<T>) => {
+    clearTimeout(timeoutId)
+    timeoutId = setTimeout(() => fn(...args), delay)
+  }
+}
+
 // --- State ---
 const containerRef = ref<HTMLElement | null>(null)
 const pdfDoc = shallowRef<pdfjsLib.PDFDocumentProxy | null>(null)
 const pagesMetaData = ref<Array<{ index: number; width: number; height: number; top: number; viewport: any }>>([])
+
+// Layout State
 const totalHeight = ref(0)
 const scrollTop = ref(0)
 const containerHeight = ref(0)
 const totalPages = ref(0)
 const scale = ref(1.5)
 
-// 高亮状态
+// Highlight State
 const highlight = ref<{ pageIndex: number; bbox: number[] } | null>(null)
 
 // Loading Status
@@ -124,11 +150,12 @@ const PAGE_GAP = 16
 const currentPage = computed(() => {
   if (!pagesMetaData.value.length) return 0
   const center = scrollTop.value + (containerHeight.value / 2)
+  // 使用 find 查找中心点所在的页面
   const page = pagesMetaData.value.find(p => center >= p.top && center <= (p.top + p.height + PAGE_GAP))
   return page ? page.index : 1
 })
 
-// 按页码索引布局数据
+// 按页码索引布局数据 (优化：添加 ?. 保护)
 const layoutDataMap = computed(() => {
   if (!props.layoutData) return {}
   const map: Record<number, any[]> = {}
@@ -141,37 +168,51 @@ const layoutDataMap = computed(() => {
   return map
 })
 
-// 虚拟滚动核心：计算可视页面
+// 虚拟滚动核心：计算可视页面 (优化：Early Break 循环)
 const visiblePages = computed(() => {
   if (pagesMetaData.value.length === 0) return []
-  // 预加载视口上下各 1 屏的高度
+  
+  // 预加载视口上下各 1 屏的高度，提升快速滚动体验
   const startY = scrollTop.value - containerHeight.value 
   const endY = scrollTop.value + containerHeight.value * 2 
   
-  return pagesMetaData.value.filter(page => {
+  const result = []
+  
+  // 优化：因为 pagesMetaData 是按 top 排序的，可以使用循环并在超出范围后 break
+  // 相比 filter 全量遍历，性能大大提升
+  for (const page of pagesMetaData.value) {
     const pageBottom = page.top + page.height
-    return pageBottom > startY && page.top < endY
-  }).map(page => ({
-    ...page,
-    rendered: renderedPages.has(page.index)
-  }))
+    
+    // 如果页面完全在视口上方，跳过
+    if (pageBottom < startY) continue
+    
+    // 如果页面顶部已经在视口下方，说明后续页面都在下方，直接中断循环
+    if (page.top > endY) break
+    
+    // 在视口范围内
+    result.push({
+      ...page,
+      rendered: renderedPages.has(page.index)
+    })
+  }
+  
+  return result
 })
 
-// --- 核心修复：监听可见页面变化，回收资源 ---
-// 解决回滚白屏问题：当页面移出可视区域时，从 renderedPages 中移除，
-// 这样当它再次进入可视区域时，`renderPage` 才会再次执行绘制。
+// --- Watchers ---
+
+// 资源回收：当页面移出视口时，取消渲染任务并移除缓存状态
 watch(visiblePages, (newPages, oldPages) => {
   if (!oldPages) return;
   
   const newIndices = new Set(newPages.map(p => p.index));
   
-  // 找出刚刚移出视口的页面
   oldPages.forEach(p => {
     if (!newIndices.has(p.index)) {
       // 1. 标记为未渲染
       renderedPages.delete(p.index);
       
-      // 2. 如果正在渲染，取消任务
+      // 2. 强行取消正在进行的渲染任务
       const task = renderTasks.get(p.index);
       if (task) {
         task.cancel();
@@ -181,10 +222,17 @@ watch(visiblePages, (newPages, oldPages) => {
   });
 })
 
+// 监听源文件变化
+watch(() => props.src, (val) => {
+  if (val) loadPdf(val)
+})
+
 // --- Methods ---
 
 const loadPdf = async (url: string) => {
   if (!url) return
+  
+  // Reset
   if (pdfDoc.value) {
     pdfDoc.value.destroy()
     pdfDoc.value = null
@@ -196,29 +244,30 @@ const loadPdf = async (url: string) => {
   
   loading.value = true
   error.value = null
-  progress.value = 10
+  progress.value = 5
   
   try {
     const response = await fetch(url)
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+    
     const blob = await response.blob()
     const objectUrl = URL.createObjectURL(blob)
-    progress.value = 30
+    progress.value = 20
 
     const loadingTask = pdfjsLib.getDocument(objectUrl)
-    loadingTask.onProgress = (p) => { if (p.total) progress.value = 30 + (p.loaded / p.total) * 40 }
+    loadingTask.onProgress = (p) => { if (p.total) progress.value = 20 + (p.loaded / p.total) * 60 }
     
     pdfDoc.value = await loadingTask.promise
     totalPages.value = pdfDoc.value.numPages
     emit('page-loaded', totalPages.value)
-    progress.value = 80
+    progress.value = 90
     
     await initLayout()
     progress.value = 100
     URL.revokeObjectURL(objectUrl)
   } catch (err: any) {
-    console.error('PDF Error:', err)
-    error.value = err.message
+    console.error('PDF Load Error:', err)
+    error.value = err.message || '无法加载文档'
   } finally {
     loading.value = false
   }
@@ -228,15 +277,24 @@ const initLayout = async () => {
   if (!pdfDoc.value || !containerRef.value) return
   processing.value = true
   
+  // 关键：在重新计算布局（例如 Resize）时，必须清除旧的渲染状态
+  // 否则页面会以旧的 scale 显示，导致模糊或错位
+  renderedPages.clear()
+  renderTasks.forEach(t => t.cancel())
+  renderTasks.clear()
+  
   try {
     containerHeight.value = containerRef.value.clientHeight
     const containerW = containerRef.value.clientWidth
     
+    // 获取第一页以计算缩放比例
     const page1 = await pdfDoc.value.getPage(1)
     const viewport = page1.getViewport({ scale: 1 })
     
-    // 留出 32px 左右边距
-    const fitScale = (containerW - 32) / viewport.width
+    // 留出 32px (左右 padding) + 滚动条空间
+    // 限制最大宽度，防止在大屏上过大
+    const targetWidth = Math.min(containerW - 32, 1200) 
+    const fitScale = targetWidth / viewport.width
     scale.value = fitScale
     
     const scaledViewport = page1.getViewport({ scale: fitScale })
@@ -259,6 +317,8 @@ const initLayout = async () => {
     
     pagesMetaData.value = pages
     totalHeight.value = currentTop + PAGE_GAP
+  } catch (e) {
+    console.error("Layout init failed:", e)
   } finally {
     processing.value = false
   }
@@ -267,9 +327,8 @@ const initLayout = async () => {
 const renderPage = async (canvas: HTMLCanvasElement | null, pageMeta: any) => {
   if (!canvas || !pdfDoc.value) return
   
-  // 检查：如果已经渲染过，且 DOM 没有被销毁（理论上 v-for 可能会复用 DOM，但我们前面做了 watch 清理）
-  // 最重要的是：如果 Canvas 的宽被重置了，说明需要重绘
-  const isCanvasClear = canvas.width === 0 || canvas.width === 300 // default size
+  // 检查：如果已经渲染过，且 DOM 没有被重置（Canvas 宽度未丢失），则跳过
+  const isCanvasClear = canvas.width === 0 || canvas.width === 300 // default canvas size
   if (!isCanvasClear && renderedPages.has(pageMeta.index)) return
   if (renderTasks.has(pageMeta.index)) return
 
@@ -283,6 +342,7 @@ const renderPage = async (canvas: HTMLCanvasElement | null, pageMeta: any) => {
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
+    // 渲染任务
     const renderTask = page.render({
       canvasContext: ctx,
       viewport: pageMeta.viewport,
@@ -290,19 +350,18 @@ const renderPage = async (canvas: HTMLCanvasElement | null, pageMeta: any) => {
     })
     
     renderTasks.set(pageMeta.index, renderTask)
+    
     await renderTask.promise
     
     renderedPages.add(pageMeta.index)
     renderTasks.delete(pageMeta.index)
   } catch (err: any) {
     if (err.name !== 'RenderingCancelledException') {
-      console.warn('Render warning:', err)
+      console.warn(`Page ${pageMeta.index} render warning:`, err)
     }
   }
 }
 
-// 坐标转换：PDF 坐标 -> DOM 样式
-// 注意：MinerU 的 layout.json 坐标通常是 [x0, y0, x1, y1]
 const getBlockStyle = (bbox: number[]) => {
   if (!bbox || bbox.length < 4) return {}
   const [x0, y0, x1, y1] = bbox
@@ -361,12 +420,18 @@ const highlightBlock = (pageIndex: number, bbox: number[]) => {
 const retry = () => { if (props.src) loadPdf(props.src) }
 
 // --- Lifecycle ---
-let resizeObserver: ResizeObserver
+let resizeObserver: ResizeObserver | null = null
+
 onMounted(() => {
   if (containerRef.value) {
-    resizeObserver = new ResizeObserver(() => {
-        if (!processing.value) initLayout()
-    })
+    // 使用防抖处理 Resize，提升性能
+    const handleResize = debounce(() => {
+      if (!processing.value && pdfDoc.value) {
+         initLayout()
+      }
+    }, 200)
+
+    resizeObserver = new ResizeObserver(handleResize)
     resizeObserver.observe(containerRef.value)
   }
   if (props.src) loadPdf(props.src)
@@ -374,17 +439,21 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (resizeObserver) resizeObserver.disconnect()
-  if (pdfDoc.value) pdfDoc.value.destroy()
+  if (pdfDoc.value) {
+    pdfDoc.value.destroy()
+    pdfDoc.value = null
+  }
+  renderedPages.clear()
+  renderTasks.forEach(t => t.cancel())
 })
 
-watch(() => props.src, (val) => val && loadPdf(val))
-
+// 暴露给父组件的方法
 defineExpose({ scrollToPercentage, highlightBlock })
 </script>
 
 <style scoped>
 .custom-scrollbar::-webkit-scrollbar { width: 8px; }
 .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-.custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
-.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+.custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; border: 2px solid transparent; background-clip: content-box; }
+.custom-scrollbar::-webkit-scrollbar-thumb:hover { background-color: #94a3b8; }
 </style>
