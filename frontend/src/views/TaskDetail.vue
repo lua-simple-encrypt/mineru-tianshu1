@@ -3,34 +3,31 @@
     <div class="flex items-center justify-between mb-4 px-1 flex-shrink-0">
       <div class="flex items-center gap-4">
         <button @click="$router.back()" class="text-sm text-gray-600 hover:text-gray-900 flex items-center transition-colors">
-          <ArrowLeft class="w-4 h-4 mr-1" /> {{ $t('common.back') }}
+          <ArrowLeft class="w-4 h-4 mr-1" /> 返回
         </button>
         <div class="h-4 w-px bg-gray-300"></div>
-        <h1 class="text-xl font-bold text-gray-900 truncate max-w-md" :title="task?.file_name">{{ task?.file_name || $t('task.taskDetail') }}</h1>
+        <h1 class="text-xl font-bold text-gray-900 truncate max-w-md" :title="task?.file_name">{{ task?.file_name || '任务详情' }}</h1>
         <StatusBadge v-if="task" :status="task.status" />
-        <span v-if="task?.result_path === 'CLEARED'" class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500 border border-gray-200">
-           <Eraser class="w-3 h-3 mr-1.5" /> {{ $t('status.cleared') }}
-        </span>
       </div>
 
       <div class="flex items-center gap-3">
         <template v-if="task">
             <button v-if="task.status === 'failed'" @click="initiateAction('retry')" :disabled="actionLoading" class="btn btn-white text-blue-600 border-gray-200 hover:bg-blue-50 btn-sm flex items-center shadow-sm transition-all disabled:opacity-50">
-              <RotateCw :class="{'animate-spin': actionLoading && currentAction === 'retry'}" class="w-4 h-4 sm:mr-1.5" />
-              <span class="hidden sm:inline">{{ $t('task.retryTask') }}</span>
+              <RotateCw :class="{'animate-spin': actionLoading && currentAction === 'retry'}" class="w-4 h-4 mr-1.5" />
+              <span>重试任务</span>
             </button>
             <button v-if="['completed', 'failed'].includes(task.status) && task.result_path !== 'CLEARED'" @click="initiateAction('clearCache')" :disabled="actionLoading" class="btn btn-white text-orange-600 border-gray-200 hover:bg-orange-50 btn-sm flex items-center shadow-sm transition-all disabled:opacity-50">
-              <Eraser :class="{'animate-pulse': actionLoading && currentAction === 'clearCache'}" class="w-4 h-4 sm:mr-1.5" />
-              <span class="hidden sm:inline">{{ $t('task.clearCache') }}</span>
+              <Eraser :class="{'animate-pulse': actionLoading && currentAction === 'clearCache'}" class="w-4 h-4 mr-1.5" />
+              <span>清理缓存</span>
             </button>
         </template>
 
         <div v-if="task?.status === 'completed' && pdfUrl && task?.result_path !== 'CLEARED'" class="flex items-center bg-gray-100 rounded-lg p-1">
           <button @click="setMode('single')" :class="['px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center', layoutMode === 'single' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700']">
-            <FileText class="w-3.5 h-3.5 mr-1.5" /> {{ $t('task.singlePage') }}
+            <FileText class="w-3.5 h-3.5 mr-1.5" /> 单栏视图
           </button>
           <button @click="setMode('split')" :class="['px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center', layoutMode === 'split' ? 'bg-white text-primary-600 shadow-sm' : 'text-gray-500 hover:text-gray-700']">
-            <Columns class="w-3.5 h-3.5 mr-1.5" /> {{ $t('task.splitView') }}
+            <Columns class="w-3.5 h-3.5 mr-1.5" /> 双栏视图
           </button>
         </div>
 
@@ -38,34 +35,29 @@
       </div>
     </div>
 
-    <div v-if="loading && !task" class="flex-1 flex items-center justify-center"><LoadingSpinner size="lg" :text="$t('common.loading')" /></div>
+    <div v-if="loading && !task" class="flex-1 flex items-center justify-center"><LoadingSpinner size="lg" text="加载中..." /></div>
     <div v-else-if="error" class="card bg-red-50 border-red-200 mx-1 p-4 mb-4"><div class="flex items-center text-red-800"><AlertCircle class="w-6 h-6 mr-3" /> {{ error }}</div></div>
 
     <div v-else-if="task" class="flex-1 min-h-0 relative">
       <div v-if="['pending', 'processing', 'paused'].includes(task.status)" class="max-w-3xl mx-auto mt-16 space-y-6 px-4">
          <div class="card p-10 text-center shadow-sm">
-            <h2 class="text-xl font-semibold text-gray-900 mb-2">{{ task.status === 'paused' ? $t('status.paused') : $t('task.taskProcessing') }}</h2>
-            <div class="mt-8 flex justify-center"><div v-if="task.status === 'paused'" class="p-4 bg-amber-50 rounded-full text-amber-500 ring-8 ring-amber-50/50"><Pause class="w-8 h-8" /></div><LoadingSpinner v-else size="lg" /></div>
+            <h2 class="text-xl font-semibold text-gray-900 mb-2">处理中...</h2>
+            <div class="mt-8 flex justify-center"><LoadingSpinner size="lg" /></div>
          </div>
       </div>
       <div v-else-if="['failed', 'cancelled'].includes(task.status)" class="max-w-3xl mx-auto mt-10 space-y-6 px-4">
          <div class="card p-8 text-center border-red-100 bg-red-50/50">
             <div class="flex justify-center mb-4"><div class="p-3 bg-red-100 rounded-full text-red-500"><AlertCircle class="w-8 h-8" /></div></div>
-            <h2 class="text-xl font-semibold text-red-700 mb-2">{{ task.status === 'failed' ? $t('status.failed') : $t('status.cancelled') }}</h2>
-            <div class="text-red-600 bg-white p-4 rounded-lg border border-red-200 font-mono text-sm text-left overflow-auto max-h-64 break-all shadow-sm">{{ task.error_message || 'Unknown error occurred' }}</div>
+            <h2 class="text-xl font-semibold text-red-700 mb-2">任务失败</h2>
+            <div class="text-red-600 bg-white p-4 rounded-lg border border-red-200 font-mono text-sm text-left overflow-auto max-h-64 break-all shadow-sm">{{ task.error_message || '未知错误' }}</div>
          </div>
-      </div>
-      <div v-else-if="task.result_path === 'CLEARED'" class="max-w-3xl mx-auto mt-16 px-4">
-        <div class="card p-12 text-center border-gray-200 bg-gray-50/30 shadow-sm"><div class="flex justify-center mb-6"><Eraser class="w-12 h-12 text-gray-400" /></div><h2 class="text-xl font-semibold text-gray-900 mb-2">{{ $t('task.filesCleared') }}</h2></div>
       </div>
 
       <div v-else class="h-full w-full flex flex-row gap-4">
         
         <div v-if="showPdf" :class="['card p-0 flex flex-col h-full border border-gray-200 relative shadow-sm min-w-0 transition-all duration-300', layoutMode === 'split' ? 'flex-1 basis-1/2' : 'flex-1 basis-full']">
           <div class="bg-gray-50 px-3 py-2 border-b border-gray-200 flex justify-between items-center shrink-0">
-            <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-              源文档预览 (点击蓝色热区对应右侧)
-            </span>
+            <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">源文档预览 (点击蓝色热区对应右侧)</span>
           </div>
           
           <div class="flex-1 relative overflow-hidden min-h-0 bg-gray-200">
@@ -81,15 +73,15 @@
         <div v-if="showMarkdown" :class="['card p-0 flex flex-col h-full shadow-sm border border-gray-200 min-w-0 transition-all duration-300', layoutMode === 'split' ? 'flex-1 basis-1/2' : 'flex-1 basis-full']">
           <div class="bg-gray-50 px-3 py-2 border-b border-gray-200 flex justify-between items-center shrink-0">
             <div class="flex items-center bg-gray-200 rounded p-0.5">
-              <button @click="activeTab = 'markdown'" :class="['tab-btn', activeTab==='markdown' ? 'active' : '']">Markdown</button>
-              <button @click="activeTab = 'json'" :class="['tab-btn', activeTab==='json' ? 'active' : '']">JSON</button>
+              <button @click="activeTab = 'markdown'" :class="['tab-btn', activeTab==='markdown' ? 'active' : '']">结构化视图</button>
+              <button @click="activeTab = 'json'" :class="['tab-btn', activeTab==='json' ? 'active' : '']">底层JSON</button>
             </div>
             <button @click="downloadMarkdown" class="text-xs text-primary-600 hover:underline flex items-center">
-              <Download class="w-3 h-3 mr-1"/> {{ $t('common.download') }}
+              <Download class="w-3 h-3 mr-1"/> 下载 MD
             </button>
           </div>
           
-          <div class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden bg-white relative custom-scrollbar p-6">
+          <div class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden bg-white relative custom-scrollbar p-6 scroll-smooth">
             <div v-if="activeTab === 'markdown'" class="w-full">
               <div v-if="layoutData.length > 0" class="prose prose-sm max-w-none text-gray-700 break-words">
                 <div 
@@ -97,22 +89,21 @@
                   :key="block.id"
                   :id="`md-block-${block.id}`"
                   @click="handleMarkdownBlockClick(block)"
-                  :class="['mb-4 p-3 rounded-md transition-colors cursor-pointer border break-words w-full', 
+                  :class="['mb-4 p-3 rounded-md transition-all cursor-pointer border break-words w-full', 
                            activeBlockId === block.id 
                              ? 'bg-yellow-50 border-yellow-400 shadow-md ring-2 ring-yellow-200' 
                              : 'border-transparent hover:bg-gray-50 hover:border-gray-200']"
                   title="点击在左侧 PDF 中定位"
                 >
-                  <div v-if="block.type === 'image'" class="text-gray-400 text-xs italic mb-1 flex items-center gap-1 select-none">
-                    <Image class="w-3 h-3"/> [提取的图片内容]
-                  </div>
-                  <div v-else-if="block.type === 'table'" class="text-gray-400 text-xs italic mb-1 flex items-center gap-1 select-none">
-                    <Table class="w-3 h-3"/> [提取的表格内容]
-                  </div>
+                  <div v-if="block.type === 'image'" class="text-gray-400 text-xs italic mb-1 flex items-center gap-1 select-none"><Image class="w-3 h-3"/> [图片内容]</div>
+                  <div v-else-if="block.type === 'table'" class="text-gray-400 text-xs italic mb-1 flex items-center gap-1 select-none"><Table class="w-3 h-3"/> [表格内容]</div>
+                  
                   <div class="whitespace-pre-wrap leading-relaxed max-w-full overflow-hidden">{{ block.text }}</div>
                 </div>
               </div>
-              <MarkdownViewer v-else :content="task.data?.content || ''" />
+              <div v-else class="text-gray-500 text-sm italic text-center mt-10">
+                未能提取到结构化版面数据，请查看 JSON 面板或原文件。
+              </div>
             </div>
             <div v-else class="h-full w-full"><JsonViewer :data="task.data?.json_content || {}" /></div>
           </div>
@@ -128,17 +119,14 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
-import { useI18n } from 'vue-i18n'
 import { useTaskStore } from '@/stores'
 import { ArrowLeft, AlertCircle, RefreshCw, FileText, Columns, Download, RotateCw, Eraser, Pause, Image, Table } from 'lucide-vue-next'
 import StatusBadge from '@/components/StatusBadge.vue'
 import LoadingSpinner from '@/components/LoadingSpinner.vue'
-import MarkdownViewer from '@/components/MarkdownViewer.vue'
 import JsonViewer from '@/components/JsonViewer.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import VirtualPdfViewer from '@/components/VirtualPdfViewer.vue'
 
-const { t } = useI18n()
 const route = useRoute()
 const taskStore = useTaskStore()
 
@@ -152,7 +140,7 @@ const activeTab = ref<'markdown' | 'json'>('markdown')
 const layoutMode = ref<'split' | 'single'>('split')
 
 // 记录当前被点击激活的模块 ID
-const activeBlockId = ref<number | null>(null) 
+const activeBlockId = ref<string | number | null>(null) 
 
 const pdfViewerRef = ref<InstanceType<typeof VirtualPdfViewer> | null>(null)
 
@@ -160,34 +148,54 @@ const pdfUrl = computed(() => task.value?.data?.pdf_path ? `/api/v1/files/output
 const showPdf = computed(() => layoutMode.value === 'split' || (layoutMode.value === 'single' && pdfUrl.value))
 const showMarkdown = computed(() => layoutMode.value === 'split' || layoutMode.value !== 'single')
 
-// 格式化后端返回的排版数据，方便点击索引
+// =======================================================
+// 🚀 [核心修复] 超强兼容数据格式化 (适配所有Paddle/MinerU格式)
+// =======================================================
 const layoutData = computed(() => {
   const jsonContent = task.value?.data?.json_content
   if (!jsonContent) return []
-  if (Array.isArray(jsonContent)) return jsonContent 
-  if (jsonContent.pages && Array.isArray(jsonContent.pages)) {
-      return jsonContent.pages.flatMap((p: any) => {
-          return (p.blocks || []).map((b: any) => ({
-              ...b,
-              page_idx: b.page_idx ?? (typeof p.page_id === 'number' ? p.page_id - 1 : 0)
-          }))
+
+  let flatBlocks: any[] = []
+
+  // 1. 新版已扁平化数据
+  if (Array.isArray(jsonContent)) {
+      flatBlocks = jsonContent
+  } 
+  // 2. 包含 pages 数组 (常规 MinerU 格式)
+  else if (jsonContent.pages && Array.isArray(jsonContent.pages)) {
+      flatBlocks = jsonContent.pages.flatMap((p: any) => {
+          // 兼容不同版本的 block 数组名
+          const blocks = p.blocks || p.parsing_res_list || [];
+          const pageIdx = p.page_index ?? p.page_id ?? 0;
+          return blocks.map((b: any, i: number) => ({ ...b, _page_idx: pageIdx, _idx: i }))
       })
   }
-  return []
+  // 3. 直接是单页对象 (根据你提供的 JSON 样例)
+  else if (jsonContent.parsing_res_list) {
+      const pageIdx = jsonContent.page_index ?? 0;
+      flatBlocks = jsonContent.parsing_res_list.map((b: any, i: number) => ({ ...b, _page_idx: pageIdx, _idx: i }))
+  }
+
+  // 统一转换属性名，适配前端渲染
+  return flatBlocks.map(b => ({
+      id: b.id ?? b.block_id ?? `${b._page_idx}-${b._idx}`,
+      page_idx: b.page_idx ?? b._page_idx ?? 0,
+      bbox: b.bbox ?? b.block_bbox ?? b.layout_bbox ?? [], // 完美兼容 block_bbox
+      text: b.text ?? b.block_content ?? '',               // 完美兼容 block_content
+      type: b.type ?? b.block_label ?? 'text'              // 完美兼容 block_label
+  }))
 })
 
+
 // =======================================================
-// 🎯 精准双向定位交互 (无任何连带滚动逻辑)
+// 🎯 精准双向定位点击
 // =======================================================
 
 // 1. 点击左侧 PDF 上的透明热区 -> 右侧对应的 Markdown 亮起黄框，并滚入视野
 const handlePdfBlockClick = (block: any) => {
   if (!block) return
-  
-  // 点亮右侧段落
   activeBlockId.value = block.id 
   
-  // 找到右侧 DOM 并滑动过去
   const el = document.getElementById(`md-block-${block.id}`)
   if (el) {
     el.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -197,12 +205,10 @@ const handlePdfBlockClick = (block: any) => {
 // 2. 点击右侧 Markdown 段落 -> 呼叫左侧 PDF 引擎跳转到该页并闪烁红框
 const handleMarkdownBlockClick = (block: any) => {
   if (!block) return
-  
-  // 点亮自己
   activeBlockId.value = block.id 
   
-  // 通知 PDF Viewer 滑动并画框
   if (pdfViewerRef.value && typeof pdfViewerRef.value.highlightBlock === 'function') {
+    // 兼容不同的 page 索引起点 (通常后端为0，PDF为1)
     const pageIndex = (typeof block.page_idx === 'number' ? block.page_idx : block.page_id) + 1
     pdfViewerRef.value.highlightBlock(pageIndex, block.bbox)
   }
@@ -217,7 +223,7 @@ let stopPolling: (() => void) | null = null
 async function refreshTask() {
   loading.value = true; error.value = '';
   try { await taskStore.fetchTaskStatus(taskId.value, false, 'both') } 
-  catch (err: any) { error.value = err.message || t('task.loadFailed') } 
+  catch (err: any) { error.value = err.message || '加载失败' } 
   finally { loading.value = false }
 }
 
@@ -248,9 +254,9 @@ const currentAction = ref<'retry' | 'clearCache' | null>(null)
 function initiateAction(action: 'retry' | 'clearCache') {
   currentAction.value = action
   if (action === 'retry') {
-    confirmTitle.value = t('task.retryTask'); confirmMessage.value = t('task.confirmRetry'); confirmType.value = 'info'
+    confirmTitle.value = '重试任务'; confirmMessage.value = '确定重试吗？'; confirmType.value = 'info'
   } else if (action === 'clearCache') {
-    confirmTitle.value = t('task.clearCache'); confirmMessage.value = t('task.confirmClearCache'); confirmType.value = 'danger'
+    confirmTitle.value = '清理缓存'; confirmMessage.value = '确定清理吗？'; confirmType.value = 'danger'
   }
   showConfirm.value = true
 }
