@@ -85,8 +85,8 @@ export interface APIKeyListResponse {
 
 // ==================== 任务相关类型 ====================
 
-// 任务状态 (增加了 'paused' 状态)
-export type TaskStatus = 'pending' | 'paused' | 'processing' | 'completed' | 'failed' | 'cancelled'
+// 任务状态 (✅ 修复：添加 'paused' 状态)
+export type TaskStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'paused'
 
 // 后端类型
 export type Backend =
@@ -260,12 +260,12 @@ export interface Task {
   completed_at: string | null
   worker_id: string | null
   retry_count: number
-  result_path: string | null | 'CLEARED' // ✅ 新增：支持 'CLEARED' 状态标记
-  source_url?: string | null  // ✅ 新增：源文件下载链接
-  is_parent?: boolean         // ✅ 新增：是否为父任务
+  result_path: string | null | 'CLEARED' // ✅ 修复：支持 'CLEARED' 状态标记
+  source_url?: string | null
+  is_parent?: boolean
   child_count?: number
   child_completed?: number
-  subtask_progress?: {        // ✅ 新增：子任务进度
+  subtask_progress?: {
     total: number
     completed: number
     percentage: number
@@ -278,7 +278,7 @@ export interface Task {
     json_file?: string
     json_content?: any
     json_available?: boolean
-    pdf_path?: string // 用于分屏对比显示的 PDF 路径
+    pdf_path?: string
   } | null
 }
 
@@ -327,10 +327,10 @@ export interface TaskQueryParams {
 // 任务列表响应
 export interface TaskListResponse {
   success: boolean
-  total: number       // ✅ 新增：总记录数
-  page: number        // ✅ 新增：当前页码
-  page_size: number   // ✅ 新增：每页数量
-  count: number       // 当前页记录数
+  total: number
+  page: number
+  page_size: number
+  count: number
   tasks: Task[]
   can_view_all?: boolean
 }
