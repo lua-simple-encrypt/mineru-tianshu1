@@ -3,11 +3,12 @@ MinerU Pipeline Engine
 单例模式，每个进程只加载一次模型
 使用 MinerU 处理 PDF 和图片
 
-修复说明：
+更新日志 (2026-02-15):
+- [新增] 智能显存休眠机制 (Auto-Sleep): 空闲 5 分钟自动释放显存
+- [新增] 自动唤醒机制 (Auto-Wakeup): 新任务自动重新加载模型
+- [优化] 移除每次任务后的强制显存清理，提升连续处理性能
 - [核心修复] 深度文本清洗 (双重反转义、去重、清洗 LaTeX 符号)
 - [核心修复] 使用临时纯英文目录处理，规避中文路径问题
-- [增强] 增加 VLLM 服务健康检查与自动等待机制
-- [增强] 修复 Markdown 内容为空时的自动恢复逻辑
 """
 
 import json
@@ -17,18 +18,26 @@ import tempfile
 import time
 import urllib.request
 import urllib.error
-import re        # <--- 正则表达式库
-import html      # <--- HTML转义库
+import re
+import html
+import gc
+import threading
 from pathlib import Path
 from typing import Optional, Dict, Any
 from threading import Lock
 from loguru import logger
 import img2pdf
 
+# 尝试导入 torch 用于显存管理
+try:
+    import torch
+except ImportError:
+    torch = None
 
 class MinerUPipelineEngine:
     """
     MinerU Pipeline 引擎
+    集成自动显存管理与深度清洗功能
     """
 
     _instance: Optional["MinerUPipelineEngine"] = None
@@ -59,10 +68,42 @@ class MinerUPipelineEngine:
             else:
                 self.gpu_id = "0"
 
+            # =========================================================
+            # [新增] 智能显存管理状态变量
+            # =========================================================
+            self.last_active_time = time.time()  # 最后活动时间
+            self.is_processing = False           # 是否正在处理任务
+            self.is_offloaded = True             # 是否已卸载显存
+            self.idle_timeout = 300              # 空闲超时时间 (秒) - 5分钟
+
+            # 启动显存监控后台线程
+            self._monitor_thread = threading.Thread(target=self._auto_sleep_monitor, daemon=True)
+            self._monitor_thread.start()
+            
             self._initialized = True
             logger.info(f"🔧 MinerU Pipeline Engine initialized on {device}")
+            logger.info(f"⏳ Auto-sleep monitor enabled (Timeout: {self.idle_timeout}s)")
             if self.vlm_api_base:
                 logger.info(f"   VLLM API Base: {self.vlm_api_base}")
+
+    def _auto_sleep_monitor(self):
+        """
+        [后台线程] 监控系统空闲状态，超时自动释放显存
+        """
+        while True:
+            time.sleep(10)  # 每10秒检查一次
+            try:
+                # 如果 1. 正在处理任务 或 2. 已经卸载，则跳过
+                if self.is_processing or self.is_offloaded:
+                    continue
+                
+                idle_duration = time.time() - self.last_active_time
+                if idle_duration > self.idle_timeout:
+                    logger.info(f"💤 System idle for {idle_duration:.0f}s. Unloading models to save VRAM...")
+                    self.cleanup() # 执行清理
+                    self.is_offloaded = True # 标记为已卸载
+            except Exception as e:
+                logger.error(f"Error in auto-sleep monitor: {e}")
 
     def _load_pipeline(self):
         """延迟加载 MinerU 管道 (do_parse)"""
@@ -121,116 +162,135 @@ class MinerUPipelineEngine:
         if not text:
             return ""
 
-        # DEBUG日志：如果你在控制台没看到这句话，说明代码没生效（需要重启服务）
         if "117" in text or "LVEDd" in text:
-            logger.info(f"🧹 [DEBUG] Executing _clean_markdown... (Length: {len(text)})")
+            logger.debug(f"🧹 Executing _clean_markdown... (Length: {len(text)})")
 
         # 1. HTML 反转义 (执行两次以解决 &amp;gt; 这种双重转义问题)
         text = html.unescape(text)
         text = html.unescape(text)
 
-        # 2. 暴力替换常见的未转义字符 (作为 html.unescape 的兜底)
-        # 这一步能解决 &gt; 变成 > 的问题
+        # 2. 暴力替换常见的未转义字符
         text = text.replace('&gt;', '>').replace('&lt;', '<').replace('&amp;', '&')
 
         # 3. 去除 LaTeX 的 \mathrm{} 包装
-        # 使用 flags=re.DOTALL 确保能处理跨行内容
         text = re.sub(r'\\mathrm\{(.*?)\}', r'\1', text, flags=re.DOTALL)
 
         # 4. 清洗 LaTeX 特殊字符
-        # 将 ~ (LaTeX非换行空格) 替换为普通空格
-        # 这一步能解决 ~cm 变成 cm 的问题
         text = text.replace('~', ' ')
         
         # 5. 去除模型幻觉产生的 <del> 标签
         text = text.replace('<del>', '').replace('</del>', '')
         
         # 6. [加强版] 暴力去重逻辑 
-        # 解决 117\n\n117 (数字重复) 和 SD+5\n\nSD+5 (带符号的短语重复)
-        # 逻辑：匹配任意非空字符块 (\S+)，后面跟着空白符，再跟着完全一样的字符块
         text = re.sub(r'(\S+)([\s\r\n]+)\1', r'\1', text)
 
-        # 7. 去除连续的多余空行 (保留最多两个换行)
+        # 7. 去除连续的多余空行
         text = re.sub(r'\n{3,}', '\n\n', text)
 
         return text
 
     def cleanup(self):
-        """清理显存"""
-        try:
-            from mineru.utils.model_utils import clean_memory
-            clean_memory()
-            logger.debug("🧹 MinerU: Memory cleanup completed")
-        except Exception:
-            pass
+        """
+        [增强版] 清理显存与模型
+        用于 Auto-Sleep 或程序退出时
+        """
+        with self._lock:
+            logger.info("🧹 Starting memory cleanup...")
+            try:
+                from mineru.utils.model_utils import clean_memory
+                clean_memory()
+            except Exception:
+                pass
+            
+            # 强制 GC 与 CUDA 缓存清理
+            try:
+                self._pipeline = None # 释放函数引用，促使下次重新加载
+                gc.collect()
+                if torch and torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.ipc_collect()
+                logger.info("✅ GPU Memory released completely.")
+            except Exception as e:
+                logger.warning(f"Hard cleanup warning: {e}")
 
     def parse(self, file_path: str, output_path: str, options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        处理文件 (增强版：临时目录 + 服务等待 + 深度清洗)
+        处理文件 (增强版：自动唤醒 + 临时目录 + 深度清洗)
         """
-        options = options or {}
+        # =========================================================
+        # 1. 状态更新与自动唤醒 (Auto-Wakeup)
+        # =========================================================
+        self.is_processing = True
+        self.last_active_time = time.time()
         
-        final_output_dir = Path(output_path)
-        final_output_dir.mkdir(parents=True, exist_ok=True)
-
-        file_path_obj = Path(file_path)
-        file_ext = file_path_obj.suffix.lower()
-
-        # 1. 确定 Backend
-        user_backend = options.get("parse_mode", "pipeline")
-        if user_backend == "auto":
-            user_backend = "pipeline"
-
-        backend = user_backend
-        server_url = options.get("server_url")
-
-        # 智能切换 VLLM
-        if not server_url and self.vlm_api_base:
-            if user_backend == "vlm-auto-engine":
-                backend = "vlm-http-client"
-                server_url = self.vlm_api_base.replace("/v1", "")
-                logger.info(f"🔄 [Accelerate] Switching to {backend} using local vLLM")
-            elif user_backend == "hybrid-auto-engine":
-                backend = "hybrid-http-client"
-                server_url = self.vlm_api_base.replace("/v1", "")
-                logger.info(f"🔄 [Accelerate] Switching to {backend} using local vLLM")
-
-        # 服务健康检查
-        if "http-client" in backend and server_url:
-            self._wait_for_server(server_url)
-
-        # 2. 准备参数
-        parse_method = options.get("method", "auto")
-        if options.get("force_ocr"):
-            parse_method = "ocr"
-
-        formula_enable = options.get("formula_enable", True)
-        table_enable = options.get("table_enable", True)
+        if self.is_offloaded:
+            logger.info("🚀 New task received. Waking up models (Auto-Wakeup)...")
+            self.is_offloaded = False
+            # 注意：下方的 _load_pipeline() 会自动处理重新加载逻辑
         
-        f_draw_layout_bbox = options.get("draw_layout_bbox", True)      
-        f_draw_span_bbox = options.get("draw_span_bbox", True)          
-        f_dump_md = options.get("dump_markdown", True)                  
-        f_dump_middle_json = options.get("dump_middle_json", True)      
-        f_dump_model_output = options.get("dump_model_output", True)    
-        f_dump_content_list = options.get("dump_content_list", True)    
-        f_dump_orig_pdf = options.get("dump_orig_pdf", True)            
-
-        start_page_id = options.get("start_page_id", 0)
-        end_page_id = options.get("end_page_id", None)
-        
-        try: start_page_id = int(start_page_id)
-        except: start_page_id = 0
-        
-        try: 
-            if end_page_id is not None and str(end_page_id).strip() != "": 
-                end_page_id = int(end_page_id)
-                if end_page_id == -1: end_page_id = None
-            else: end_page_id = None
-        except: end_page_id = None
-
-        do_parse_func = self._load_pipeline()
-
         try:
+            options = options or {}
+            
+            final_output_dir = Path(output_path)
+            final_output_dir.mkdir(parents=True, exist_ok=True)
+
+            file_path_obj = Path(file_path)
+            file_ext = file_path_obj.suffix.lower()
+
+            # 1. 确定 Backend
+            user_backend = options.get("parse_mode", "pipeline")
+            if user_backend == "auto":
+                user_backend = "pipeline"
+
+            backend = user_backend
+            server_url = options.get("server_url")
+
+            # 智能切换 VLLM
+            if not server_url and self.vlm_api_base:
+                if user_backend == "vlm-auto-engine":
+                    backend = "vlm-http-client"
+                    server_url = self.vlm_api_base.replace("/v1", "")
+                    logger.info(f"🔄 [Accelerate] Switching to {backend} using local vLLM")
+                elif user_backend == "hybrid-auto-engine":
+                    backend = "hybrid-http-client"
+                    server_url = self.vlm_api_base.replace("/v1", "")
+                    logger.info(f"🔄 [Accelerate] Switching to {backend} using local vLLM")
+
+            # 服务健康检查
+            if "http-client" in backend and server_url:
+                self._wait_for_server(server_url)
+
+            # 2. 准备参数
+            parse_method = options.get("method", "auto")
+            if options.get("force_ocr"):
+                parse_method = "ocr"
+
+            formula_enable = options.get("formula_enable", True)
+            table_enable = options.get("table_enable", True)
+            
+            f_draw_layout_bbox = options.get("draw_layout_bbox", True)      
+            f_draw_span_bbox = options.get("draw_span_bbox", True)          
+            f_dump_md = options.get("dump_markdown", True)                  
+            f_dump_middle_json = options.get("dump_middle_json", True)      
+            f_dump_model_output = options.get("dump_model_output", True)    
+            f_dump_content_list = options.get("dump_content_list", True)    
+            f_dump_orig_pdf = options.get("dump_orig_pdf", True)            
+
+            start_page_id = options.get("start_page_id", 0)
+            end_page_id = options.get("end_page_id", None)
+            
+            try: start_page_id = int(start_page_id)
+            except: start_page_id = 0
+            
+            try: 
+                if end_page_id is not None and str(end_page_id).strip() != "": 
+                    end_page_id = int(end_page_id)
+                    if end_page_id == -1: end_page_id = None
+                else: end_page_id = None
+            except: end_page_id = None
+
+            do_parse_func = self._load_pipeline()
+
             with open(file_path, "rb") as f:
                 file_bytes = f.read()
 
@@ -300,10 +360,7 @@ class MinerUPipelineEngine:
                     md_file = temp_md_files[0]
                     raw_content = md_file.read_text(encoding="utf-8")
                     
-                    # =========================================================
-                    # 【核心修复】调用 _clean_markdown 进行深度清洗
-                    # 解决 &gt;, \mathrm{}, <del> 等问题
-                    # =========================================================
+                    # 深度清洗
                     content = self._clean_markdown(raw_content)
                     
                     # 覆盖写入清洗后的内容
@@ -325,12 +382,10 @@ class MinerUPipelineEngine:
                     if isinstance(json_content, list):
                         for block in json_content:
                             text = block.get("text", "")
-                            # 恢复时也做清洗
                             text = self._clean_markdown(text)
                             recovered_text.append(text)
                     content = "\n\n".join(recovered_text)
                     
-                    # 如果有 MD 文件，更新它
                     if temp_md_files:
                         temp_md_files[0].write_text(content, encoding="utf-8")
                         
@@ -353,7 +408,7 @@ class MinerUPipelineEngine:
                 final_mds = list(final_output_dir.rglob("*.md"))
                 if final_mds:
                     final_md_path = str(final_mds[0])
-                    # 覆盖写入清洗后的内容 (双重保险)
+                    # 覆盖写入
                     Path(final_md_path).write_text(content, encoding="utf-8")
                 
                 final_jsons = list(final_output_dir.rglob("*_content_list.json"))
@@ -381,7 +436,14 @@ class MinerUPipelineEngine:
             raise
 
         finally:
-            self.cleanup()
+            # =========================================================
+            # [关键修改]
+            # 移除之前的强制 self.cleanup()
+            # 改为更新活跃时间戳，让后台线程处理释放
+            # =========================================================
+            self.is_processing = False
+            self.last_active_time = time.time()
+            logger.info("🏁 Task finished. Model remains loaded for fast reuse (Auto-sleep in 5min).")
 
 
 # 全局单例
