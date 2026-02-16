@@ -3,9 +3,10 @@ PaddleOCR-VL-VLLM 解析引擎 (Optimized + Bidirectional Layout Support)
 单例模式，每个进程只加载一次基础版面识别模型, OCR部分调用配置的API
 
 功能增强 (2026-02-15):
-1. [双向定位] 输出包含 bbox 的结构化数据 (json_content)，支持前端点击跳转。
-2. [资源管理] 包含智能显存休眠 (Auto-Sleep) 和自动唤醒 (Auto-Wakeup)。
-3. [稳定性] 强制单线程推理以解决 vLLM Tokenizer 竞态崩溃。
+1. [修复] 双向精准定位：提取每个文本块的 bbox 并输出扁平化结构数据
+2. [新增] 智能显存休眠 (Auto-Sleep): 空闲 5 分钟自动释放显存
+3. [新增] 自动唤醒 (Auto-Wakeup): 新请求自动加载模型
+4. [稳定性] 强制单线程推理以解决 vLLM Tokenizer 竞态崩溃
 """
 
 import os
@@ -15,7 +16,6 @@ import time
 import requests
 import traceback
 import threading
-import uuid
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from threading import Lock
@@ -51,6 +51,9 @@ class PaddleOCRVLVLLMEngine:
                  device: str = "cuda:0", 
                  vllm_api_base: str = None, 
                  model_name: str = "PaddleOCR-VL-1.5-0.9B"):
+        """
+        初始化引擎
+        """
         if self._initialized:
             return
 
@@ -59,9 +62,11 @@ class PaddleOCRVLVLLMEngine:
                 return
 
             self.device = device
+            # 优先使用传入参数，其次环境变量，最后默认 Docker 内部地址
             self.vllm_api_base = vllm_api_base or os.getenv("VLLM_API_BASE", "http://vllm-paddleocr:30023/v1")
             self.model_name = model_name
 
+            # 提取 GPU ID
             if "cuda:" in device:
                 try:
                     self.gpu_id = int(device.split(":")[-1])
@@ -145,57 +150,45 @@ class PaddleOCRVLVLLMEngine:
             if not self._check_vllm_health():
                 logger.error(f"❌ VLLM service unreachable at {self.vllm_api_base}")
 
-            logger.info("=" * 60)
-            logger.info("📥 Loading PaddleOCR-VL-VLLM Pipeline...")
-            logger.info("=" * 60)
-
+            logger.info("📥 Loading PaddleOCR-VL-VLLM Pipeline (Auto-Wakeup)...")
             try:
                 import paddle
                 from paddleocr import PaddleOCRVL
-
                 if paddle.is_compiled_with_cuda():
                     paddle.set_device(f"gpu:{self.gpu_id}")
 
-                # 设置 PaddleX 主目录
-                pdx_home = os.environ.get("PADDLEX_HOME", "/root/.paddlex")
-                
-                # 初始化管道
                 self._pipeline = PaddleOCRVL(
                     vl_rec_backend="vllm-server",
                     vl_rec_server_url=self.vllm_api_base,
                 )
-                
                 logger.info("✅ Pipeline loaded successfully")
                 return self._pipeline
-
             except Exception as e:
                 logger.error(f"❌ Pipeline load failed: {e}")
-                logger.error(traceback.format_exc())
                 raise
 
     def cleanup(self):
         """释放显存"""
         with self._lock:
-            self._pipeline = None
+            self._pipeline = None 
             try:
                 import paddle
                 if paddle.device.is_compiled_with_cuda():
                     paddle.device.cuda.empty_cache()
                 gc.collect()
-                logger.info("✅ VRAM released.")
+                logger.info("✅ GPU Memory released.")
             except:
                 pass
 
     def parse(self, file_path: str, output_path: str, **kwargs) -> Dict[str, Any]:
         """
-        执行解析并返回结构化数据（包含 bbox）
+        解析文档入口并提取布局数据 (Phase 5 支持)
         """
-        # 1. 自动唤醒
         self.is_processing = True
         self.last_active_time = time.time()
         
         if self.is_offloaded:
-            logger.info("🚀 New task received. Waking up PaddleOCR-VLLM engine...")
+            logger.info("🚀 New task received. Waking up engine...")
             self.is_offloaded = False
 
         try:
@@ -203,11 +196,9 @@ class PaddleOCRVLVLLMEngine:
             output_path = Path(output_path)
             output_path.mkdir(parents=True, exist_ok=True)
 
-            logger.info(f"🤖 Processing: {file_path.name}")
-            
             pipeline = self._load_pipeline()
 
-            # 参数映射 (保持与 Worker 一致)
+            # 参数映射
             param_mapping = {
                 "useDocOrientationClassify": "use_doc_orientation_classify",
                 "useDocUnwarping": "use_doc_unwarping",
@@ -229,64 +220,59 @@ class PaddleOCRVLVLLMEngine:
                 if k in param_mapping:
                     predict_params[param_mapping[k]] = v
             
-            # 默认参数
-            if "use_layout_parsing" not in predict_params: predict_params["use_layout_parsing"] = True
-            if "use_doc_orientation_classify" not in predict_params: predict_params["use_doc_orientation_classify"] = False
-            
-            # 🚀 执行推理
+            # 执行推理
             output_generator = pipeline.predict(**predict_params)
 
             markdown_pages = []
             markdown_list_obj = []
-            
-            # [关键] 用于存储所有页面的结构化数据 (含 bbox)
-            full_content_list = [] 
+            json_list = []      # 原始分页 JSON
+            full_content_list = [] # [新增] 用于双向定位的扁平化结构
             page_count = 0
 
             for res in output_generator:
                 page_count += 1
                 if res is None: continue
 
-                page_output_dir = output_path / f"page_{page_count}"
-                page_output_dir.mkdir(parents=True, exist_ok=True)
+                page_dir = output_path / f"page_{page_count}"
+                page_dir.mkdir(parents=True, exist_ok=True)
 
-                # 1. 保存图片和 JSON
-                if hasattr(res, "save_to_img"): res.save_to_img(str(page_output_dir))
-                if hasattr(res, "save_to_json"): res.save_to_json(str(page_output_dir))
+                # 1. 保存图片和原始 JSON
+                if hasattr(res, "save_to_img"): res.save_to_img(str(page_dir))
+                if hasattr(res, "save_to_json"): res.save_to_json(str(page_dir))
 
-                # 2. 提取结构化数据 (包含 BBox)
-                # PaddleX 的 res.json 通常包含 'res' 列表，里面有 layout_bbox 和 text
+                # 2. [核心修复] 提取结构化数据 (BBox) 用于双向定位
                 if hasattr(res, "json") and res.json:
-                    page_data = res.json
-                    
-                    # 尝试从 PaddleX 结果中提取 blocks
-                    # 结构通常是: {'res': [{'bbox': [x,y,x,y], 'text': '...', 'type': '...'}, ...]}
-                    if isinstance(page_data, dict) and 'res' in page_data:
-                        blocks = page_data['res']
+                    json_list.append(res.json)
+                    # PaddleX 结果格式解析: {'res': [{'bbox': [x,y,x,y], 'text': '...', 'type': '...'}, ...]}
+                    if isinstance(res.json, dict) and 'res' in res.json:
+                        blocks = res.json['res']
                         for block in blocks:
-                            # 规范化 Block 数据供前端使用
+                            # 构造前端可读的 Block 数据
                             clean_block = {
-                                "id": len(full_content_list) + 1, # 全局唯一 ID
-                                "page_idx": page_count - 1,       # 0-based page index
+                                "id": len(full_content_list) + 1,  # 生成全局 ID
+                                "page_idx": page_count - 1,        # 0-based 页索引
                                 "type": block.get('type', 'text'),
                                 "text": block.get('text', ''),
-                                "bbox": block.get('layout_bbox') or block.get('bbox') or [], # 确保有坐标
+                                "bbox": block.get('layout_bbox') or block.get('bbox') or [], # 提取坐标
                                 "score": block.get('score', 0)
                             }
-                            # 只有有坐标和内容的块才添加
-                            if clean_block['bbox'] and (clean_block['text'] or clean_block['type'] in ['image', 'table']):
+                            # 只有包含有效坐标的块才加入，供前端定位
+                            if clean_block['bbox']:
                                 full_content_list.append(clean_block)
 
                 # 3. 提取 Markdown
+                page_md = ""
                 if hasattr(res, "markdown") and res.markdown:
                     markdown_list_obj.append(res.markdown)
-                    # 尝试提取字符串 markdown
-                    if hasattr(res.markdown, 'markdown_texts'):
-                        markdown_pages.append(res.markdown.markdown_texts)
-                    elif isinstance(res.markdown, dict):
-                        markdown_pages.append(res.markdown.get('markdown_texts', ''))
+                    if isinstance(res.markdown, dict):
+                        page_md = res.markdown.get('markdown_texts', '')
+                    elif hasattr(res.markdown, 'markdown_texts'):
+                        page_md = res.markdown.markdown_texts
                     else:
-                        markdown_pages.append(str(res.markdown))
+                        page_md = str(res.markdown)
+                
+                if page_md:
+                    markdown_pages.append(page_md)
                 
                 logger.info(f"✅ Processed Page {page_count}")
 
@@ -299,17 +285,13 @@ class PaddleOCRVLVLLMEngine:
             else:
                 markdown_text = "\n\n---\n\n".join(markdown_pages)
 
-            # 保存结果
+            # 保存最终文件
             (output_path / "result.md").write_text(markdown_text, encoding="utf-8")
             
-            # [关键] 生成 content_list.json (扁平化结构，供前端定位使用)
-            # 如果 full_content_list 为空（某些模型模式下），尝试用 json_list 兜底，或者前端做兼容
-            final_json_data = full_content_list
-            
-            # 保存 detailed JSON
+            # [关键] 构造 result.json，结构必须包含前端可见的 full_content_list
             json_file = output_path / "result.json"
             with open(json_file, "w", encoding="utf-8") as f:
-                json.dump(final_json_data, f, ensure_ascii=False, indent=2)
+                json.dump(full_content_list, f, ensure_ascii=False, indent=2)
 
             return {
                 "success": True,
@@ -317,18 +299,17 @@ class PaddleOCRVLVLLMEngine:
                 "markdown": markdown_text,
                 "markdown_file": str(output_path / "result.md"),
                 "json_file": str(json_file),
-                # 返回 json_content 给 worker，worker 会将其存入 DB
-                "json_content": final_json_data 
+                "json_content": full_content_list # 返回给 Worker，Worker 负责将其存入数据库
             }
 
         except Exception as e:
-            logger.error(f"❌ OCR Pipeline Critical Error: {e}")
+            logger.error(f"❌ OCR Pipeline Error: {e}")
             logger.error(traceback.format_exc())
             raise
         finally:
             self.is_processing = False
             self.last_active_time = time.time()
-            logger.info("🏁 Task finished. Pipeline remains loaded.")
+            logger.info("🏁 Task finished. Model stays loaded (5min auto-sleep).")
 
 # 全局单例
 _engine = None
