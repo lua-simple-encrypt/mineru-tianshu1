@@ -1,6 +1,6 @@
 <template>
   <div class="relative w-full h-full flex flex-col bg-gray-200/50">
-    <div v-if="loading || processing" class="absolute top-0 left-0 w-full h-1 bg-gray-200 z-50">
+    <div v-if="loading || processing" class="absolute top-0 left-0 w-full h-0.5 bg-gray-200 z-50">
       <div class="h-full bg-blue-600 transition-all duration-300 ease-out shadow-[0_0_10px_rgba(37,99,235,0.5)]" :style="{ width: `${progress}%` }"></div>
     </div>
 
@@ -87,7 +87,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch, computed, shallowRef } from 'vue'
+import { ref, onMounted, onUnmounted, watch, computed, shallowRef, nextTick } from 'vue'
 import * as pdfjsLib from 'pdfjs-dist'
 import pdfWorker from 'pdfjs-dist/build/pdf.worker?url'
 
@@ -107,7 +107,7 @@ const emit = defineEmits<{
 }>()
 
 // --- Utilities ---
-// 简单的防抖函数，避免 Resize 过于频繁
+// 简单的防抖函数
 function debounce<T extends (...args: any[]) => void>(fn: T, delay: number) {
   let timeoutId: ReturnType<typeof setTimeout>
   return (...args: Parameters<T>) => {
@@ -179,7 +179,6 @@ const visiblePages = computed(() => {
   const result = []
   
   // 优化：因为 pagesMetaData 是按 top 排序的，可以使用循环并在超出范围后 break
-  // 相比 filter 全量遍历，性能大大提升
   for (const page of pagesMetaData.value) {
     const pageBottom = page.top + page.height
     
@@ -202,6 +201,7 @@ const visiblePages = computed(() => {
 // --- Watchers ---
 
 // 资源回收：当页面移出视口时，取消渲染任务并移除缓存状态
+// 这是解决“滚回去白屏”的关键逻辑
 watch(visiblePages, (newPages, oldPages) => {
   if (!oldPages) return;
   
@@ -278,7 +278,6 @@ const initLayout = async () => {
   processing.value = true
   
   // 关键：在重新计算布局（例如 Resize）时，必须清除旧的渲染状态
-  // 否则页面会以旧的 scale 显示，导致模糊或错位
   renderedPages.clear()
   renderTasks.forEach(t => t.cancel())
   renderTasks.clear()
@@ -328,7 +327,8 @@ const renderPage = async (canvas: HTMLCanvasElement | null, pageMeta: any) => {
   if (!canvas || !pdfDoc.value) return
   
   // 检查：如果已经渲染过，且 DOM 没有被重置（Canvas 宽度未丢失），则跳过
-  const isCanvasClear = canvas.width === 0 || canvas.width === 300 // default canvas size
+  // 只有当 canvas.width 为默认值 (300) 或 0 时才说明它是新创建/重置的
+  const isCanvasClear = canvas.width === 0 || canvas.width === 300 
   if (!isCanvasClear && renderedPages.has(pageMeta.index)) return
   if (renderTasks.has(pageMeta.index)) return
 
@@ -356,12 +356,14 @@ const renderPage = async (canvas: HTMLCanvasElement | null, pageMeta: any) => {
     renderedPages.add(pageMeta.index)
     renderTasks.delete(pageMeta.index)
   } catch (err: any) {
+    // 忽略取消渲染的错误
     if (err.name !== 'RenderingCancelledException') {
       console.warn(`Page ${pageMeta.index} render warning:`, err)
     }
   }
 }
 
+// 坐标转换：PDF 坐标 -> DOM 样式
 const getBlockStyle = (bbox: number[]) => {
   if (!bbox || bbox.length < 4) return {}
   const [x0, y0, x1, y1] = bbox
@@ -389,12 +391,15 @@ const onScroll = (e: Event) => {
   })
 }
 
+// API: 滚动到指定百分比 (Phase 4)
 const scrollToPercentage = (percentage: number) => {
   if (!containerRef.value) return
   const targetTop = percentage * (containerRef.value.scrollHeight - containerRef.value.clientHeight)
+  // 使用 auto 避免同步时的延迟累积
   containerRef.value.scrollTo({ top: targetTop, behavior: 'auto' }) 
 }
 
+// API: 高亮并跳转到指定区域 (Phase 5)
 const highlightBlock = (pageIndex: number, bbox: number[]) => {
   if (!containerRef.value) return
   
@@ -412,7 +417,7 @@ const highlightBlock = (pageIndex: number, bbox: number[]) => {
       behavior: 'smooth'
     })
     
-    // 3秒后清除高亮
+    // 3秒后自动清除高亮
     setTimeout(() => { highlight.value = null }, 3000)
   }
 }
