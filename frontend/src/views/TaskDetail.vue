@@ -89,13 +89,13 @@
             </button>
           </div>
           
-          <div class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden bg-white relative custom-scrollbar p-6 scroll-smooth">
+          <div class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden bg-white relative custom-scrollbar px-6 pt-6 pb-12 scroll-smooth flex flex-col">
             
-            <div v-if="activeTab === 'markdown'" class="w-full">
+            <div v-if="activeTab === 'markdown'" class="w-full flex-1">
                <MarkdownViewer :content="task.data?.content || ''" />
             </div>
 
-            <div v-else-if="activeTab === 'sync'" class="w-full max-w-[800px] mx-auto">
+            <div v-else-if="activeTab === 'sync'" class="w-full max-w-[800px] mx-auto flex-1">
               <div v-if="layoutData.length > 0" class="flex flex-col gap-3">
                 <div class="text-xs text-gray-500 bg-blue-50 p-2.5 rounded-lg mb-3 border border-blue-100">
                   💡 此视图用于与左侧 PDF 进行行级别的双向点击定位。如果需要阅读带有精美排版和公式的全局文档，请切换至上方【完整文档】标签。
@@ -122,7 +122,10 @@
               <div v-else class="text-gray-500 text-sm italic text-center mt-10">未能提取到结构化版面数据。</div>
             </div>
 
-            <div v-else class="h-full w-full"><JsonViewer :data="task.data?.json_content || {}" /></div>
+            <div v-else class="w-full flex-1">
+               <JsonViewer :data="task.data?.json_content || {}" />
+            </div>
+            
           </div>
         </div>
 
@@ -167,9 +170,6 @@ const pdfUrl = computed(() => task.value?.data?.pdf_path ? `/api/v1/files/output
 const showPdf = computed(() => layoutMode.value === 'split' || (layoutMode.value === 'single' && pdfUrl.value))
 const showMarkdown = computed(() => layoutMode.value === 'split' || layoutMode.value !== 'single')
 
-// =======================================================
-// 🚀 [核心修复] 超强兼容数据格式化，提取 _page_width 供坐标转换
-// =======================================================
 const layoutData = computed(() => {
   const jsonContent = task.value?.data?.json_content
   if (!jsonContent) return []
@@ -197,21 +197,14 @@ const layoutData = computed(() => {
       bbox: b.bbox ?? b.block_bbox ?? b.layout_bbox ?? [], 
       text: b.text ?? b.block_content ?? '',               
       type: b.type ?? b.block_label ?? 'text',
-      _page_width: b._page_width || 595.28 // 提取该页的绝对原生宽度，下传给画布换算比例
+      _page_width: b._page_width || 595.28 
   }))
 })
 
-
-// =======================================================
-// 🎯 精准双向定位点击 (剥离了所有同步滚动的逻辑)
-// =======================================================
-
-// 1. 点击左侧 PDF 上的透明热区 -> 右侧对应的 Markdown 亮起黄框，并滚入视野
 const handlePdfBlockClick = (block: any) => {
   if (!block) return
   activeBlockId.value = block.id 
   
-  // 必须确保在定位视图
   if (activeTab.value !== 'sync') {
     activeTab.value = 'sync';
   }
@@ -222,7 +215,6 @@ const handlePdfBlockClick = (block: any) => {
   })
 }
 
-// 2. 点击右侧 Markdown 段落 -> 呼叫左侧 PDF 引擎跳转到该页并闪烁红框
 const handleMarkdownBlockClick = (block: any) => {
   if (!block) return
   activeBlockId.value = block.id 
@@ -233,16 +225,13 @@ const handleMarkdownBlockClick = (block: any) => {
   }
 }
 
-// =======================================================
-// 生命周期与基础逻辑
-// =======================================================
 const setMode = (mode: 'split' | 'single') => { layoutMode.value = mode }
 let stopPolling: (() => void) | null = null
 
 async function refreshTask() {
   loading.value = true; error.value = '';
   try { await taskStore.fetchTaskStatus(taskId.value, false, 'both') } 
-  catch (err: any) { error.value = err.message || t('task.loadFailed') } 
+  catch (err: any) { error.value = err.message || '加载失败' } 
   finally { loading.value = false }
 }
 
@@ -277,7 +266,7 @@ function initiateAction(action: 'retry' | 'clearCache' | 'delete') {
   } else if (action === 'clearCache') {
     confirmTitle.value = '清理缓存'; confirmMessage.value = '确定清理吗？'; confirmType.value = 'warning'
   } else if (action === 'delete') {
-    confirmTitle.value = '删除任务'; confirmMessage.value = '彻底删除该任务及文件？不可恢复。'; confirmType.value = 'danger'
+    confirmTitle.value = '删除任务'; confirmMessage.value = '确定要彻底删除该任务及其所有文件吗？此操作不可恢复。'; confirmType.value = 'danger'
   }
   showConfirm.value = true
 }
@@ -291,7 +280,8 @@ async function executeAction() {
     } else if (currentAction.value === 'clearCache') {
       await taskStore.clearTaskCache(taskId.value); await refreshTask();
     } else if (currentAction.value === 'delete') {
-      await taskStore.deleteTask(taskId.value); router.back();
+      await taskStore.deleteTask(taskId.value); 
+      router.back(); 
     }
   } catch (err: any) { error.value = err.message || 'Action failed' } 
   finally { actionLoading.value = false; currentAction.value = null }
