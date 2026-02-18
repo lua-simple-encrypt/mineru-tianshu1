@@ -4,7 +4,7 @@ PaddleOCR-VL 解析引擎 (PaddleX v3 Local Wrapper)
 支持自动多语言识别、Markdown 格式输出
 
 优化日志 (2026-02-15):
-1. [功能] 双向精准定位支持：提取 bbox 并输出结构化 json_content
+1. [功能] 双向精准定位支持：提取 bbox 并输出结构化 json_content，已适配 block_order 排序
 2. [资源] 智能显存休眠 (Auto-Sleep): 空闲 5 分钟自动释放显存
 3. [资源] 自动唤醒 (Auto-Wakeup): 新请求自动加载模型
 4. [性能] 移除单次任务后的强制清理，提升连续处理性能
@@ -301,17 +301,28 @@ class PaddleOCRVLEngine:
                     json_list.append(res.json)
                     
                     # [新增] 提取 BBox 用于双向定位
-                    # PaddleX 返回格式: {'res': [{'bbox': [...], 'text': '...', 'type': '...'}, ...]}
-                    if isinstance(res.json, dict) and 'res' in res.json:
-                        blocks = res.json['res']
+                    if isinstance(res.json, dict):
+                        # 兼容 PaddleX 的不同返回格式 ('res' 或 'parsing_res_list')
+                        blocks = res.json.get('res') or res.json.get('parsing_res_list') or []
+                        
+                        # 严格类型检查，防止崩溃
+                        if not isinstance(blocks, list):
+                            if isinstance(blocks, dict) and ('bbox' in blocks or 'layout_bbox' in blocks or 'block_bbox' in blocks):
+                                blocks = [blocks]
+                            else:
+                                blocks = []
+
                         for block in blocks:
+                            if not isinstance(block, dict): continue
+
                             clean_block = {
                                 "id": len(full_content_list) + 1, # 全局唯一 ID
                                 "page_idx": page_count - 1,       # 0-based page index
-                                "type": block.get('type', 'text'),
-                                "text": block.get('text', ''),
-                                "bbox": block.get('layout_bbox') or block.get('bbox') or [], # 优先使用 layout_bbox
-                                "score": block.get('score', 0)
+                                "type": block.get('type') or block.get('block_label') or 'text',
+                                "text": block.get('text') or block.get('block_content') or '',
+                                "bbox": block.get('layout_bbox') or block.get('block_bbox') or block.get('bbox') or [], 
+                                "score": block.get('score', 0),
+                                "order": block.get('block_order') # 提取 block_order 保证前端排序正确
                             }
                             # 只有包含坐标的才加入列表
                             if clean_block['bbox']:
