@@ -5,7 +5,7 @@ PaddleOCR-VL-VLLM 解析引擎 (Ultimate Optimized Edition)
 功能增强:
 1. [稳定性] 强制单线程推理以解决 vLLM Tokenizer "Already borrowed" 竞态崩溃问题
 2. [防崩溃] 增加 VLM NoneType 异常捕获与降级重试机制 (Fallback)
-3. [双向定位] 输出包含 bbox 的结构化数据 (json_content)，供前端双屏联动
+3. [双向定位] 输出包含 bbox 的结构化数据 (json_content)，供前端双屏联动，已适配 block_order 排序
 4. [资源管理] 智能显存休眠 (Auto-Sleep) 和自动唤醒 (Auto-Wakeup)
 5. [高可用] 融合 MD 文件本地提取兜底与 PADDLEX_HOME 环境锁定
 """
@@ -204,7 +204,7 @@ class PaddleOCRVLVLLMEngine:
 
     def parse(self, file_path: str, output_path: str, **kwargs) -> Dict[str, Any]:
         """
-        解析文档入口 (增强版：自动唤醒 + 状态维护 + 防崩溃降级)
+        解析文档入口 (增强版：自动唤醒 + 状态维护 + 防崩溃降级 + 双向定位提取)
         """
         # =========================================================
         # 1. 状态更新与自动唤醒
@@ -312,12 +312,13 @@ class PaddleOCRVLVLLMEngine:
                 # =========================================================
                 if hasattr(res, "json") and res.json:
                     json_list.append(res.json)
-                    if isinstance(res.json, dict) and 'res' in res.json:
-                        blocks = res.json['res']
+                    if isinstance(res.json, dict):
+                        # 兼容 PaddleX 的不同返回格式 ('res' 或 'parsing_res_list')
+                        blocks = res.json.get('res') or res.json.get('parsing_res_list') or []
                         
                         # 严格类型检查，防止崩溃
                         if not isinstance(blocks, list):
-                            if isinstance(blocks, dict) and ('bbox' in blocks or 'layout_bbox' in blocks):
+                            if isinstance(blocks, dict) and ('bbox' in blocks or 'layout_bbox' in blocks or 'block_bbox' in blocks):
                                 blocks = [blocks]
                             else:
                                 blocks = []
@@ -328,10 +329,11 @@ class PaddleOCRVLVLLMEngine:
                             clean_block = {
                                 "id": len(full_content_list) + 1,
                                 "page_idx": page_count - 1,
-                                "type": block.get('type', 'text'),
-                                "text": block.get('text', ''),
-                                "bbox": block.get('layout_bbox') or block.get('bbox') or [],
-                                "score": block.get('score', 0)
+                                "type": block.get('type') or block.get('block_label') or 'text',
+                                "text": block.get('text') or block.get('block_content') or '',
+                                "bbox": block.get('layout_bbox') or block.get('block_bbox') or block.get('bbox') or [],
+                                "score": block.get('score', 0),
+                                "order": block.get('block_order') # 提取 block_order 保证前端排序正确
                             }
                             if clean_block['bbox']:
                                 full_content_list.append(clean_block)
