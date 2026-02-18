@@ -202,13 +202,12 @@ const layoutData = computed(() => {
       flatBlocks = jsonContent.parsing_res_list.map((b: any, i: number) => ({ ...b, _page_idx: pageIdx, _idx: i, _page_width: jsonContent.width }))
   }
 
-  // 关键改动：基于页码和数组全局索引生成唯一 ID，防止由于后端不同页的 ID 被重置为0或1，导致前端 document.getElementById 永远定位到第一页
   const formattedBlocks = flatBlocks.map((b, globalIdx) => {
       const pIdx = b.page_idx ?? b._page_idx ?? 0;
       const uniqueId = `block-${pIdx}-${globalIdx}`; 
 
       return {
-          id: uniqueId,  // 强制替换为全局安全 ID
+          id: uniqueId,  
           orig_id: b.id ?? b.block_id,
           page_idx: pIdx,
           bbox: b.bbox ?? b.block_bbox ?? b.layout_bbox ?? [], 
@@ -219,7 +218,6 @@ const layoutData = computed(() => {
       }
   })
 
-  // 执行严格的顺序排序逻辑
   formattedBlocks.sort((a, b) => {
      if (a.page_idx !== b.page_idx) return a.page_idx - b.page_idx;
      
@@ -240,7 +238,6 @@ const layoutData = computed(() => {
 // 🎯 精准双向定位点击：加入了抗抖动延迟
 // =======================================================
 
-// 点击左侧 PDF 上的透明热区 -> 右侧对应的 Markdown 亮起黄框，并滚入视野
 const handlePdfBlockClick = (block: any) => {
   if (!block) return
   activeBlockId.value = block.id 
@@ -250,9 +247,6 @@ const handlePdfBlockClick = (block: any) => {
     activeTab.value = 'sync';
   }
 
-  // 关键修复：使用 setTimeout 替代 nextTick。
-  // 如果从完整文档切换过来，右侧庞大的 DOM（包含 Markdown 表格解析）撑开高度需要一点时间。
-  // 立即获取到的高度是不准的，会导致 scrollIntoView 滑不到中间。
   const delay = isSwitchingTab ? 150 : 50; 
 
   setTimeout(() => {
@@ -263,7 +257,6 @@ const handlePdfBlockClick = (block: any) => {
   }, delay)
 }
 
-// 点击右侧 Markdown 段落 -> 呼叫左侧 PDF 引擎跳转到该页并闪烁红框
 const handleMarkdownBlockClick = (block: any) => {
   if (!block) return
   activeBlockId.value = block.id 
@@ -289,8 +282,12 @@ async function refreshTask() {
 
 function startPolling() {
   if (stopPolling) stopPolling()
-  stopPolling = taskStore.pollTaskStatus(taskId.value, 3000, (updatedTask) => {
-    if (['completed', 'failed', 'cancelled'].includes(updatedTask.status)) stopPolling()
+  stopPolling = taskStore.pollTaskStatus(taskId.value, 3000, async (updatedTask) => {
+    if (['completed', 'failed', 'cancelled'].includes(updatedTask.status)) {
+      stopPolling()
+      // [修复核心]：任务完成后，自动执行一次全量拉取数据（包含 json_content）
+      await refreshTask()
+    }
   })
 }
 
