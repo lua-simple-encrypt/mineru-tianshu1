@@ -1,384 +1,314 @@
 <template>
-  <div class="relative w-full h-full flex flex-col bg-gray-200/80 overflow-hidden">
-    <div v-if="loading || processing" class="absolute top-0 left-0 w-full h-1 bg-gray-200 z-50">
-      <div class="h-full bg-primary-600 transition-all duration-300 shadow-[0_0_10px_rgba(99,102,241,0.5)]" :style="{ width: `${progress}%` }"></div>
-    </div>
-
-    <div v-if="error" class="absolute inset-0 flex flex-col items-center justify-center bg-white z-50 p-6 text-center">
-      <div class="bg-red-50 p-4 rounded-full mb-3 text-red-500">
-        <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+  <div class="h-[calc(100vh-4rem)] flex flex-col">
+    <div class="flex items-center justify-between mb-4 px-1 flex-shrink-0">
+      <div class="flex items-center gap-4">
+        <button @click="$router.back()" class="text-sm text-gray-600 hover:text-gray-900 flex items-center transition-colors">
+          <ArrowLeft class="w-4 h-4 mr-1" /> 返回
+        </button>
+        <div class="h-4 w-px bg-gray-300"></div>
+        <h1 class="text-xl font-bold text-gray-900 truncate max-w-md" :title="task?.file_name">{{ task?.file_name || '任务详情' }}</h1>
+        <StatusBadge v-if="task" :status="task.status" />
       </div>
-      <div class="text-gray-900 font-semibold text-lg mb-1">PDF 加载失败</div>
-      <div class="text-gray-500 text-xs break-all max-w-md bg-gray-50 p-2 rounded border border-gray-100 mb-4">{{ error }}</div>
-      <button @click="retry" class="px-5 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition shadow-sm text-sm font-medium">重新加载</button>
+
+      <div class="flex items-center gap-3">
+        <template v-if="task">
+            <button v-if="task.status === 'failed'" @click="initiateAction('retry')" :disabled="actionLoading" class="btn btn-white text-blue-600 border-gray-200 hover:bg-blue-50 btn-sm flex items-center shadow-sm transition-all disabled:opacity-50">
+              <RotateCw :class="{'animate-spin': actionLoading && currentAction === 'retry'}" class="w-4 h-4 mr-1.5" />
+              <span>重试任务</span>
+            </button>
+            <button v-if="['completed', 'failed'].includes(task.status) && task.result_path !== 'CLEARED'" @click="initiateAction('clearCache')" :disabled="actionLoading" class="btn btn-white text-orange-600 border-gray-200 hover:bg-orange-50 btn-sm flex items-center shadow-sm transition-all disabled:opacity-50">
+              <Eraser :class="{'animate-pulse': actionLoading && currentAction === 'clearCache'}" class="w-4 h-4 mr-1.5" />
+              <span>清理缓存</span>
+            </button>
+            <button @click="initiateAction('delete')" :disabled="actionLoading" class="btn btn-white text-red-600 border-gray-200 hover:bg-red-50 btn-sm flex items-center shadow-sm transition-all disabled:opacity-50" title="彻底删除任务及文件">
+              <Trash2 class="w-4 h-4 mr-1.5" />
+              <span class="hidden sm:inline">彻底删除</span>
+            </button>
+        </template>
+
+        <div v-if="task?.status === 'completed' && pdfUrl && task?.result_path !== 'CLEARED'" class="flex items-center bg-gray-100 rounded-lg p-1">
+          <button @click="setMode('single')" :class="['px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center', layoutMode === 'single' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700']">
+            <FileText class="w-3.5 h-3.5 mr-1.5" /> 单栏视图
+          </button>
+          <button @click="setMode('split')" :class="['px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center', layoutMode === 'split' ? 'bg-white text-primary-600 shadow-sm' : 'text-gray-500 hover:text-gray-700']">
+            <Columns class="w-3.5 h-3.5 mr-1.5" /> 双栏视图
+          </button>
+        </div>
+
+        <button @click="refreshTask()" :disabled="loading" class="btn btn-secondary btn-sm shadow-sm"><RefreshCw :class="{ 'animate-spin': loading }" class="w-4 h-4" /></button>
+      </div>
     </div>
 
-    <div ref="scrollContainer" class="flex-1 overflow-y-auto w-full custom-scrollbar relative outline-none" @scroll="onScroll" tabindex="0">
-      <div :style="{ height: totalHeight + 'px' }" class="relative w-full">
-        <div 
-          v-for="page in visiblePages" 
-          :key="page.id"
-          class="absolute left-0 w-full flex justify-center transition-opacity duration-200"
-          :style="{ top: page.top + 'px', height: page.height + 'px' }"
-        >
-          <div class="bg-white shadow-sm relative transition-shadow hover:shadow-md" :style="{ width: page.width + 'px', height: page.height + 'px' }">
-            
-            <div v-if="!page.rendered" class="absolute inset-0 flex items-center justify-center bg-gray-50/50 z-10">
-              <div class="flex flex-col items-center">
-                <div class="w-8 h-8 border-4 border-gray-200 border-t-primary-600 rounded-full animate-spin mb-2"></div>
-                <span class="text-gray-400 text-xs font-mono font-medium absolute mt-12">Page {{ page.id }}</span>
-              </div>
-            </div>
+    <div v-if="loading && !task" class="flex-1 flex items-center justify-center"><LoadingSpinner size="lg" text="加载中..." /></div>
+    <div v-else-if="error" class="card bg-red-50 border-red-200 mx-1 p-4 mb-4"><div class="flex items-center text-red-800"><AlertCircle class="w-6 h-6 mr-3" /> {{ error }}</div></div>
 
-            <canvas :id="`pdf-canvas-${page.id}`" :ref="(el) => mountCanvas(el, page)" class="block w-full h-full relative z-0"></canvas>
+    <div v-else-if="task" class="flex-1 min-h-0 relative">
+      <div v-if="['pending', 'processing', 'paused'].includes(task.status)" class="max-w-3xl mx-auto mt-16 space-y-6 px-4">
+         <div class="card p-10 text-center shadow-sm">
+            <h2 class="text-xl font-semibold text-gray-900 mb-2">处理中...</h2>
+            <div class="mt-8 flex justify-center"><LoadingSpinner size="lg" /></div>
+         </div>
+      </div>
+      <div v-else-if="['failed', 'cancelled'].includes(task.status)" class="max-w-3xl mx-auto mt-10 space-y-6 px-4">
+         <div class="card p-8 text-center border-red-100 bg-red-50/50">
+            <div class="flex justify-center mb-4"><div class="p-3 bg-red-100 rounded-full text-red-500"><AlertCircle class="w-8 h-8" /></div></div>
+            <h2 class="text-xl font-semibold text-red-700 mb-2">任务失败</h2>
+            <div class="text-red-600 bg-white p-4 rounded-lg border border-red-200 font-mono text-sm text-left overflow-auto max-h-64 break-all shadow-sm">{{ task.error_message || '未知错误' }}</div>
+         </div>
+      </div>
 
-            <div v-if="page.rendered && layoutMap[page.id]" class="absolute inset-0 z-20 pointer-events-none">
-              <div
-                v-for="block in layoutMap[page.id]"
-                :key="block.id"
-                class="absolute cursor-pointer pointer-events-auto border border-transparent hover:border-blue-400 hover:bg-blue-500/15 transition-all rounded-[2px]"
-                :style="getBlockStyle(page.id, block.bbox)"
-                @click.stop="$emit('block-click', block)"
-                :title="`定位到解析结果 (ID: ${block.id})`"
-              ></div>
-            </div>
-
-            <div 
-              v-if="highlightTarget && highlightTarget.pageIndex === page.id"
-              class="absolute z-30 border-[3px] border-red-500 bg-red-500/20 animate-pulse pointer-events-none box-border rounded-[4px] shadow-[0_0_15px_rgba(239,68,68,0.7)]"
-              :style="getBlockStyle(page.id, highlightTarget.bbox)"
-            ></div>
-
+      <div v-else class="h-full w-full flex flex-row gap-4">
+        
+        <div v-if="showPdf" :class="['card p-0 flex flex-col h-full border border-gray-200 relative shadow-sm min-w-0 transition-all duration-300', layoutMode === 'split' ? 'flex-1 basis-1/2' : 'flex-1 basis-full']">
+          <div class="bg-gray-50 px-3 py-2 border-b border-gray-200 flex justify-between items-center shrink-0">
+            <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">源文档预览 (悬浮出现互动热区)</span>
+          </div>
+          
+          <div class="flex-1 relative overflow-hidden min-h-0 bg-gray-200">
+            <VirtualPdfViewer
+              ref="pdfViewerRef"
+              :src="pdfUrl"
+              :layout-data="layoutData"
+              @block-click="handlePdfBlockClick"
+            />
           </div>
         </div>
+
+        <div v-if="showMarkdown" :class="['card p-0 flex flex-col h-full shadow-sm border border-gray-200 min-w-0 transition-all duration-300', layoutMode === 'split' ? 'flex-1 basis-1/2' : 'flex-1 basis-full']">
+          <div class="bg-gray-50 px-3 py-2 border-b border-gray-200 flex justify-between items-center shrink-0">
+            <div class="flex items-center bg-gray-200 rounded p-0.5">
+              <button @click="activeTab = 'markdown'" :class="['tab-btn', activeTab==='markdown' ? 'active' : '']">完整文档</button>
+              <button @click="activeTab = 'sync'" :class="['tab-btn flex items-center gap-1', activeTab==='sync' ? 'active' : '']">
+                双向定位
+                <span v-if="activeBlockId" class="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
+              </button>
+              <button @click="activeTab = 'json'" :class="['tab-btn', activeTab==='json' ? 'active' : '']">JSON</button>
+            </div>
+            <button @click="downloadMarkdown" class="text-xs text-primary-600 hover:underline flex items-center">
+              <Download class="w-3 h-3 mr-1"/> 下载文件
+            </button>
+          </div>
+          
+          <div class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden bg-white relative custom-scrollbar p-6 scroll-smooth">
+            
+            <div v-if="activeTab === 'markdown'" class="w-full">
+               <MarkdownViewer :content="task.data?.content || ''" />
+            </div>
+
+            <div v-else-if="activeTab === 'sync'" class="w-full max-w-[800px] mx-auto">
+              <div v-if="layoutData.length > 0" class="flex flex-col gap-3">
+                <div class="text-xs text-gray-500 bg-blue-50 p-2.5 rounded-lg mb-3 border border-blue-100">
+                  💡 此视图用于与左侧 PDF 进行行级别的双向点击定位。如果需要阅读带有精美排版和公式的全局文档，请切换至上方【完整文档】标签。
+                </div>
+                
+                <div 
+                  v-for="block in layoutData" 
+                  :key="block.id"
+                  :id="`md-block-${block.id}`"
+                  @click="handleMarkdownBlockClick(block)"
+                  :class="['p-3 rounded-lg transition-all cursor-pointer border break-words w-full text-[14px] leading-relaxed', 
+                           activeBlockId === block.id 
+                             ? 'bg-yellow-50 border-yellow-400 shadow-sm ring-2 ring-yellow-200' 
+                             : 'bg-white border-gray-100 hover:bg-gray-50 hover:border-gray-300']"
+                  title="点击在左侧 PDF 中定位"
+                >
+                  <div v-if="block.type === 'image'" class="text-blue-500 text-xs font-semibold mb-1 flex items-center gap-1 select-none"><Image class="w-3.5 h-3.5"/> [提取图片]</div>
+                  <div v-else-if="block.type === 'table'" class="text-green-500 text-xs font-semibold mb-1 flex items-center gap-1 select-none"><Table class="w-3.5 h-3.5"/> [提取表格]</div>
+                  <div v-else-if="block.type === 'doc_title'" class="text-lg font-bold text-gray-900 mb-1 border-b pb-1">{{ block.text }}</div>
+                  
+                  <div v-if="block.type !== 'doc_title'" class="whitespace-pre-wrap font-mono text-gray-600">{{ block.text }}</div>
+                </div>
+              </div>
+              <div v-else class="text-gray-500 text-sm italic text-center mt-10">未能提取到结构化版面数据。</div>
+            </div>
+
+            <div v-else class="h-full w-full"><JsonViewer :data="task.data?.json_content || {}" /></div>
+          </div>
+        </div>
+
       </div>
     </div>
-    
-    <div v-if="!loading && totalPages > 0" class="absolute bottom-6 right-8 bg-gray-900/75 text-white px-3 py-1.5 rounded-md text-xs backdrop-blur-md z-30 font-mono shadow-lg pointer-events-none select-none border border-white/10">
-      {{ currentPage }} <span class="text-gray-400 mx-1">/</span> {{ totalPages }}
-    </div>
+
+    <ConfirmDialog v-model="showConfirm" :title="confirmTitle" :message="confirmMessage" :type="confirmType" @confirm="executeAction" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onUnmounted, onMounted } from 'vue'
-import * as pdfjsLib from 'pdfjs-dist'
-import pdfWorker from 'pdfjs-dist/build/pdf.worker?url'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
+import { useI18n } from 'vue-i18n'
+import { useTaskStore } from '@/stores'
+import { ArrowLeft, AlertCircle, RefreshCw, FileText, Columns, Download, RotateCw, Eraser, Pause, Image, Table, Trash2 } from 'lucide-vue-next'
+import StatusBadge from '@/components/StatusBadge.vue'
+import LoadingSpinner from '@/components/LoadingSpinner.vue'
+import MarkdownViewer from '@/components/MarkdownViewer.vue'
+import JsonViewer from '@/components/JsonViewer.vue'
+import ConfirmDialog from '@/components/ConfirmDialog.vue'
+import VirtualPdfViewer from '@/components/VirtualPdfViewer.vue'
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker
+const { t } = useI18n()
+const router = useRouter()
+const route = useRoute()
+const taskStore = useTaskStore()
 
-const props = defineProps<{
-  src: string | null
-  layoutData?: any[] 
-}>()
-
-const emit = defineEmits<{
-  (e: 'block-click', block: any): void
-}>()
-
-const scrollContainer = ref<HTMLElement | null>(null)
-let pdfProxy: pdfjsLib.PDFDocumentProxy | null = null
-
+const taskId = computed(() => route.params.id as string)
+const task = computed(() => taskStore.currentTask)
 const loading = ref(false)
-const processing = ref(false)
-const progress = ref(0)
-const error = ref<string | null>(null)
-const highlightTarget = ref<{ pageIndex: number; bbox: any[] } | null>(null)
+const actionLoading = ref(false)
+const error = ref('')
 
-const scrollTop = ref(0)
-const containerHeight = ref(0)
-const totalHeight = ref(0) 
-const totalPages = ref(0)
-const globalScale = ref(1.0)
-const PAGE_GAP = 16 
+const activeTab = ref<'markdown' | 'sync' | 'json'>('markdown')
+const layoutMode = ref<'split' | 'single'>('split')
 
-interface PageData {
-  id: number
-  width: number
-  height: number
-  top: number 
-  viewport: any
-  rendered: boolean
-}
-const pages = ref<PageData[]>([])
-const renderTasks = new Map<number, any>()
-let lastWidth = 0 
+const activeBlockId = ref<string | number | null>(null) 
+const pdfViewerRef = ref<InstanceType<typeof VirtualPdfViewer> | null>(null)
 
-const sourcePdfWidth = computed(() => {
-  if (props.layoutData && props.layoutData.length > 0 && props.layoutData[0]._page_width) {
-    return props.layoutData[0]._page_width;
+const pdfUrl = computed(() => task.value?.data?.pdf_path ? `/api/v1/files/output/${task.value.data.pdf_path}` : null)
+const showPdf = computed(() => layoutMode.value === 'split' || (layoutMode.value === 'single' && pdfUrl.value))
+const showMarkdown = computed(() => layoutMode.value === 'split' || layoutMode.value !== 'single')
+
+// =======================================================
+// 🚀 [核心修复] 超强兼容数据格式化，提取 _page_width 供坐标转换
+// =======================================================
+const layoutData = computed(() => {
+  const jsonContent = task.value?.data?.json_content
+  if (!jsonContent) return []
+
+  let flatBlocks: any[] = []
+
+  if (Array.isArray(jsonContent)) {
+      flatBlocks = jsonContent
+  } 
+  else if (jsonContent.pages && Array.isArray(jsonContent.pages)) {
+      flatBlocks = jsonContent.pages.flatMap((p: any) => {
+          const blocks = p.blocks || p.parsing_res_list || [];
+          const pageIdx = p.page_index ?? p.page_id ?? 0;
+          return blocks.map((b: any, i: number) => ({ ...b, _page_idx: pageIdx, _idx: i, _page_width: p.width }))
+      })
   }
-  return 595.28; 
+  else if (jsonContent.parsing_res_list) {
+      const pageIdx = jsonContent.page_index ?? 0;
+      flatBlocks = jsonContent.parsing_res_list.map((b: any, i: number) => ({ ...b, _page_idx: pageIdx, _idx: i, _page_width: jsonContent.width }))
+  }
+
+  return flatBlocks.map(b => ({
+      id: b.id ?? b.block_id ?? `${b._page_idx}-${b._idx}`,
+      page_idx: b.page_idx ?? b._page_idx ?? 0,
+      bbox: b.bbox ?? b.block_bbox ?? b.layout_bbox ?? [], 
+      text: b.text ?? b.block_content ?? '',               
+      type: b.type ?? b.block_label ?? 'text',
+      _page_width: b._page_width || 595.28 // 提取该页的绝对原生宽度，下传给画布换算比例
+  }))
 })
 
-const layoutMap = computed(() => {
-  const map: Record<number, any[]> = {}
-  if (!props.layoutData) return map
-  props.layoutData.forEach(block => {
-    const pId = (typeof block.page_idx === 'number' ? block.page_idx : block.page_id) + 1
-    if (!map[pId]) map[pId] = []
-    map[pId].push(block)
-  })
-  return map
-})
 
-const pageOcrScales = computed(() => {
-  const scales: Record<number, number> = {};
-  for (const page of pages.value) {
-    scales[page.id] = page.width / sourcePdfWidth.value;
-  }
-  return scales;
-});
+// =======================================================
+// 🎯 精准双向定位点击 (剥离了所有同步滚动的逻辑)
+// =======================================================
 
-const getBlockStyle = (pageId: number, bbox: any) => {
-  if (!bbox || !Array.isArray(bbox) || bbox.length === 0) return { display: 'none' }
+// 1. 点击左侧 PDF 上的透明热区 -> 右侧对应的 Markdown 亮起黄框，并滚入视野
+const handlePdfBlockClick = (block: any) => {
+  if (!block) return
+  activeBlockId.value = block.id 
   
-  let x0 = 0, y0 = 0, x1 = 0, y1 = 0;
-  
-  if (bbox.length === 4 && typeof bbox[0] === 'number') {
-    [x0, y0, x1, y1] = bbox as number[];
-  } else if (bbox.length === 4 && Array.isArray(bbox[0])) {
-    const xs = bbox.map((p: number[]) => p[0]); const ys = bbox.map((p: number[]) => p[1]);
-    x0 = Math.min(...xs); y0 = Math.min(...ys); x1 = Math.max(...xs); y1 = Math.max(...ys);
-  } else { return { display: 'none' } }
-
-  const s = pageOcrScales.value[pageId] || globalScale.value;
-  
-  return { 
-    left: `${x0 * s}px`, 
-    top: `${y0 * s}px`, 
-    width: `${Math.max((x1 - x0) * s, 6)}px`, 
-    height: `${Math.max((y1 - y0) * s, 6)}px` 
-  }
-}
-
-// 虚拟列表：只筛选在屏幕视口范围内（加一定缓冲区）的元素
-const visiblePages = computed(() => {
-  if (pages.value.length === 0) return []
-  const startY = scrollTop.value - containerHeight.value * 1.5
-  const endY = scrollTop.value + containerHeight.value * 2.5 
-  const result = []
-  
-  for (const page of pages.value) {
-    const pageBottom = page.top + page.height
-    if (pageBottom < startY) continue
-    if (page.top > endY) break // 找到超出底部的直接 break，极大提升性能
-    result.push(page)
-  }
-  return result
-})
-
-// 内存回收优化
-watch(visiblePages, (newPages, oldPages) => {
-  if (!newPages || newPages.length === 0) return;
-
-  const newIndices = new Set(newPages.map(p => p.id));
-  if (oldPages) {
-    oldPages.forEach(p => {
-      if (!newIndices.has(p.id)) {
-        // 🚀 O(1) 索引替换原来的 find 查找，避免卡顿
-        const orig = pages.value[p.id - 1]
-        if (orig) orig.rendered = false
-        const task = renderTasks.get(p.id);
-        if (task) { task.cancel(); renderTasks.delete(p.id); }
-      }
-    });
+  // 必须确保在定位视图
+  if (activeTab.value !== 'sync') {
+    activeTab.value = 'sync';
   }
 
   nextTick(() => {
-    newPages.forEach(p => {
-      if (!p.rendered && !renderTasks.has(p.id)) {
-        const canvasId = `pdf-canvas-${p.id}`
-        const canvas = document.getElementById(canvasId) as HTMLCanvasElement
-        if(canvas) renderCanvas(canvas, p);
-      }
-    })
+    const el = document.getElementById(`md-block-${block.id}`)
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
   })
-}, { immediate: true, deep: true })
-
-const onScroll = (e: Event) => {
-  scrollTop.value = (e.target as HTMLElement).scrollTop
 }
 
-const currentPage = computed(() => {
-  if (pages.value.length === 0) return 0
-  const center = scrollTop.value + (containerHeight.value / 3)
-  const page = pages.value.find(p => center >= p.top && center <= (p.top + p.height + PAGE_GAP))
-  return page ? page.id : 1
-})
-
-const retry = () => {
-    if (props.src) loadPdf(props.src)
+// 2. 点击右侧 Markdown 段落 -> 呼叫左侧 PDF 引擎跳转到该页并闪烁红框
+const handleMarkdownBlockClick = (block: any) => {
+  if (!block) return
+  activeBlockId.value = block.id 
+  
+  if (pdfViewerRef.value && typeof pdfViewerRef.value.highlightBlock === 'function') {
+    const pageIndex = (typeof block.page_idx === 'number' ? block.page_idx : block.page_id) + 1
+    pdfViewerRef.value.highlightBlock(pageIndex, block.bbox)
+  }
 }
 
-const loadPdf = async (url: string) => {
-  if (!url) return
-  error.value = null; loading.value = true; progress.value = 10;
-  pages.value = []; renderTasks.clear();
-  if (pdfProxy) { pdfProxy.destroy(); pdfProxy = null }
+// =======================================================
+// 生命周期与基础逻辑
+// =======================================================
+const setMode = (mode: 'split' | 'single') => { layoutMode.value = mode }
+let stopPolling: (() => void) | null = null
 
+async function refreshTask() {
+  loading.value = true; error.value = '';
+  try { await taskStore.fetchTaskStatus(taskId.value, false, 'both') } 
+  catch (err: any) { error.value = err.message || t('task.loadFailed') } 
+  finally { loading.value = false }
+}
+
+function startPolling() {
+  if (stopPolling) stopPolling()
+  stopPolling = taskStore.pollTaskStatus(taskId.value, 3000, (updatedTask) => {
+    if (['completed', 'failed', 'cancelled'].includes(updatedTask.status)) stopPolling()
+  })
+}
+
+const downloadMarkdown = () => {
+  if (!task.value?.data?.content) return
+  const blob = new Blob([task.value.data.content], { type: 'text/markdown' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = task.value.data.markdown_file || `${taskId.value}.md`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+const showConfirm = ref(false)
+const confirmTitle = ref('')
+const confirmMessage = ref('')
+const confirmType = ref<'info' | 'warning' | 'danger'>('info')
+const currentAction = ref<'retry' | 'clearCache' | 'delete' | null>(null)
+
+function initiateAction(action: 'retry' | 'clearCache' | 'delete') {
+  currentAction.value = action
+  if (action === 'retry') {
+    confirmTitle.value = '重试任务'; confirmMessage.value = '确定重试吗？'; confirmType.value = 'info'
+  } else if (action === 'clearCache') {
+    confirmTitle.value = '清理缓存'; confirmMessage.value = '确定清理吗？'; confirmType.value = 'warning'
+  } else if (action === 'delete') {
+    confirmTitle.value = '删除任务'; confirmMessage.value = '彻底删除该任务及文件？不可恢复。'; confirmType.value = 'danger'
+  }
+  showConfirm.value = true
+}
+
+async function executeAction() {
+  if (!currentAction.value) return
+  actionLoading.value = true
   try {
-    const loadingTask = pdfjsLib.getDocument(url)
-    loadingTask.onProgress = (p) => { if (p.total) progress.value = 10 + (p.loaded / p.total) * 60 }
-    pdfProxy = await loadingTask.promise
-    totalPages.value = pdfProxy.numPages
-    progress.value = 80
-    await buildPageSkeletons()
-  } catch (err: any) {
-    error.value = 'PDF解析失败，请检查文件格式。'
-  } finally {
-    loading.value = false; progress.value = 100
-  }
-}
-
-// 🚀 性能大爆炸优化：只拉取第 1 页的长宽，推算剩下所有页面的骨架坐标！(O(N) 变为 O(1))
-const buildPageSkeletons = async (retryCount = 0) => {
-  if (!pdfProxy || !scrollContainer.value) return
-  processing.value = true
-
-  const containerW = scrollContainer.value.clientWidth - 40
-  if (containerW <= 0) {
-    if (retryCount < 50) setTimeout(() => buildPageSkeletons(retryCount + 1), 50)
-    return
-  }
-  containerHeight.value = scrollContainer.value.clientHeight
-  lastWidth = containerW
-
-  const newPages: PageData[] = []
-  
-  // 仅获取第 1 页作为基准尺寸，免去海量异步请求
-  const page1 = await pdfProxy.getPage(1)
-  const baseViewport = page1.getViewport({ scale: 1 })
-  const fitScale = Math.min(containerW / baseViewport.width, 1.8) 
-  globalScale.value = fitScale
-
-  const defaultViewport = page1.getViewport({ scale: fitScale })
-  const defaultWidth = defaultViewport.width
-  const defaultHeight = defaultViewport.height
-
-  let currentTop = PAGE_GAP
-
-  // 直接批量填充假定数据，1000 页也只需 1 毫秒
-  for (let i = 1; i <= totalPages.value; i++) {
-    newPages.push({ 
-      id: i, 
-      width: defaultWidth, 
-      height: defaultHeight, 
-      top: currentTop, 
-      viewport: defaultViewport, 
-      rendered: false 
-    })
-    currentTop += defaultHeight + PAGE_GAP
-  }
-  
-  pages.value = newPages
-  totalHeight.value = currentTop
-  processing.value = false
-}
-
-const mountCanvas = (el: any, pageInfo: PageData) => {
-  const canvas = el as HTMLCanvasElement;
-  if (canvas && !pageInfo.rendered && !renderTasks.has(pageInfo.id)) {
-    renderCanvas(canvas, pageInfo);
-  }
-}
-
-// 渲染真实页面
-const renderCanvas = async (canvas: HTMLCanvasElement, pageInfo: PageData) => {
-  if (!pdfProxy) return
-  
-  renderTasks.set(pageInfo.id, true)
-  const origPage = pages.value[pageInfo.id - 1]
-  
-  try {
-    const page = await pdfProxy.getPage(pageInfo.id)
-    const dpr = window.devicePixelRatio || 1
-    
-    // 🚀 在真实渲染时，拉取这一页真实的尺寸覆盖之前的推测尺寸
-    const actualViewport = page.getViewport({ scale: globalScale.value })
-
-    canvas.width = actualViewport.width * dpr
-    canvas.height = actualViewport.height * dpr
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-
-    const renderCtx = { canvasContext: ctx, viewport: actualViewport, transform: [dpr, 0, 0, dpr, 0, 0] }
-    await page.render(renderCtx).promise
-    
-    if (origPage) {
-        origPage.rendered = true
-        // 万一这页尺寸确实和第一页不同，更新热区图层参照的宽高度
-        origPage.width = actualViewport.width
-        origPage.height = actualViewport.height
+    if (currentAction.value === 'retry') {
+      await taskStore.retryTask(taskId.value); await refreshTask(); startPolling();
+    } else if (currentAction.value === 'clearCache') {
+      await taskStore.clearTaskCache(taskId.value); await refreshTask();
+    } else if (currentAction.value === 'delete') {
+      await taskStore.deleteTask(taskId.value); router.back();
     }
-  } catch (err: any) {
-    if (err.name !== 'RenderingCancelledException') console.warn(`Render Page ${pageInfo.id} failed:`, err)
-    if (origPage) origPage.rendered = false
-  } finally {
-    renderTasks.delete(pageInfo.id)
-  }
+  } catch (err: any) { error.value = err.message || 'Action failed' } 
+  finally { actionLoading.value = false; currentAction.value = null }
 }
 
-const highlightBlock = (pageIndex: number, bbox: any) => {
-  if (!scrollContainer.value) return
-  highlightTarget.value = { pageIndex, bbox }
-  
-  const pageNode = pages.value[pageIndex - 1]
-  if (pageNode) {
-    let blockY = 0
-    if (bbox && bbox.length === 4) {
-      blockY = typeof bbox[0] === 'number' ? bbox[1] : Math.min(...bbox.map((p:any)=>p[1]))
-    }
-    const s = pageOcrScales.value[pageIndex] || globalScale.value;
-    const targetScroll = pageNode.top + (blockY * s) - (containerHeight.value / 3)
-    
-    scrollContainer.value.scrollTo({ top: Math.max(0, targetScroll), behavior: 'smooth' })
-    setTimeout(() => { highlightTarget.value = null }, 3000)
-  }
-}
-
-function debounceResize(fn: any, delay: number) {
-  let timeoutId: any;
-  return (...args: any[]) => {
-    clearTimeout(timeoutId)
-    timeoutId = setTimeout(() => fn(...args), delay)
-  }
-}
-
-let resizeObserver: ResizeObserver | null = null
-
-onMounted(() => {
-  if (scrollContainer.value) {
-    const handleResize = debounceResize(() => {
-      if (!scrollContainer.value) return
-      const currentWidth = scrollContainer.value.clientWidth
-      
-      if (currentWidth > 0 && Math.abs(currentWidth - lastWidth) > 2) {
-        if (!processing.value && pdfProxy) buildPageSkeletons()
-      } else if (currentWidth > 0) {
-        containerHeight.value = scrollContainer.value.clientHeight
-      }
-    }, 200)
-
-    resizeObserver = new ResizeObserver(handleResize)
-    resizeObserver.observe(scrollContainer.value)
-  }
+onMounted(async () => {
+  await refreshTask()
+  if (task.value && ['pending', 'processing'].includes(task.value.status)) startPolling()
 })
-
-watch(() => props.src, (url) => { if(url) loadPdf(url) }, { immediate: true })
-
-onUnmounted(() => {
-  if (resizeObserver) resizeObserver.disconnect()
-  if (pdfProxy) { pdfProxy.destroy(); pdfProxy = null }
-  renderTasks.clear()
-})
-
-defineExpose({ highlightBlock })
+onUnmounted(() => { if (stopPolling) stopPolling() })
 </script>
 
 <style scoped>
-.custom-scrollbar::-webkit-scrollbar { width: 8px; }
+.tab-btn { @apply text-xs px-3 py-1.5 rounded transition-all text-gray-500 font-medium whitespace-nowrap; }
+.tab-btn.active { @apply bg-white text-primary-600 shadow-sm border border-gray-100; }
+.custom-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
 .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-.custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; background-clip: content-box; border: 2px solid transparent;}
+.custom-scrollbar::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 4px; background-clip: content-box;}
 .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
 </style>
