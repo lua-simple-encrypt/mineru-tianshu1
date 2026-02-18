@@ -103,7 +103,7 @@ export async function getTaskStatus(
 }
 
 /**
- * 取消任务 (主要用于中断进行中的任务)
+ * 取消任务
  */
 export async function cancelTask(taskId: string): Promise<ApiResponse> {
   const response = await apiClient.delete<ApiResponse>(`/api/v1/tasks/${taskId}`)
@@ -121,7 +121,7 @@ export async function listTasks(params: TaskQueryParams): Promise<TaskListRespon
 }
 
 // =================================================================
-// 新增管理接口：重试、暂停、恢复、清理、彻底删除
+// 新增管理接口：重试、暂停、恢复、清理
 // =================================================================
 
 /**
@@ -161,13 +161,5 @@ export async function clearTaskCache(taskId: string): Promise<ApiResponse> {
  */
 export async function clearFailedTasks(): Promise<{ status: string; deleted_count: number }> {
   const response = await apiClient.delete<{ status: string; deleted_count: number }>('/api/v1/tasks/failed/clear')
-  return response.data
-}
-
-/**
- * 彻底删除任务 (物理删除数据库记录、源文件和结果文件夹)
- */
-export async function deleteTask(taskId: string): Promise<ApiResponse> {
-  const response = await apiClient.delete<ApiResponse>(`/api/v1/tasks/${taskId}`)
   return response.data
 }
