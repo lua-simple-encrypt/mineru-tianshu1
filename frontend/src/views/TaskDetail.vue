@@ -171,7 +171,7 @@ const showPdf = computed(() => layoutMode.value === 'split' || (layoutMode.value
 const showMarkdown = computed(() => layoutMode.value === 'split' || layoutMode.value !== 'single')
 
 // =======================================================
-// 🚀 [核心修复] 超强兼容数据格式化，执行严格排序
+// 🚀 核心修复：防止多页 block.id 冲突，强制生成全局唯一 ID
 // =======================================================
 const layoutData = computed(() => {
   const jsonContent = task.value?.data?.json_content
@@ -181,9 +181,9 @@ const layoutData = computed(() => {
 
   if (Array.isArray(jsonContent)) {
       if (jsonContent.length > 0 && (jsonContent[0].parsing_res_list || jsonContent[0].blocks)) {
-          flatBlocks = jsonContent.flatMap((p: any) => {
+          flatBlocks = jsonContent.flatMap((p: any, pIdx: number) => {
               const blocks = p.parsing_res_list || p.blocks || [];
-              const pageIdx = p.page_index ?? p.page_id ?? 0;
+              const pageIdx = p.page_index ?? p.page_id ?? p.page_no ?? pIdx;
               return blocks.map((b: any, i: number) => ({ ...b, _page_idx: pageIdx, _idx: i, _page_width: p.width }))
           })
       } else {
@@ -191,9 +191,9 @@ const layoutData = computed(() => {
       }
   } 
   else if (jsonContent.pages && Array.isArray(jsonContent.pages)) {
-      flatBlocks = jsonContent.pages.flatMap((p: any) => {
+      flatBlocks = jsonContent.pages.flatMap((p: any, pIdx: number) => {
           const blocks = p.blocks || p.parsing_res_list || [];
-          const pageIdx = p.page_index ?? p.page_id ?? 0;
+          const pageIdx = p.page_index ?? p.page_id ?? p.page_no ?? pIdx;
           return blocks.map((b: any, i: number) => ({ ...b, _page_idx: pageIdx, _idx: i, _page_width: p.width }))
       })
   }
@@ -202,59 +202,68 @@ const layoutData = computed(() => {
       flatBlocks = jsonContent.parsing_res_list.map((b: any, i: number) => ({ ...b, _page_idx: pageIdx, _idx: i, _page_width: jsonContent.width }))
   }
 
-  const formattedBlocks = flatBlocks.map(b => ({
-      id: b.id ?? b.block_id ?? `${b._page_idx}-${b._idx}`,
-      page_idx: b.page_idx ?? b._page_idx ?? 0,
-      bbox: b.bbox ?? b.block_bbox ?? b.layout_bbox ?? [], 
-      text: b.text ?? b.block_content ?? '',               
-      type: b.type ?? b.block_label ?? 'text',
-      order: b.order ?? b.block_order ?? null, // [修复1] 提取 order 属性
-      _page_width: b._page_width || 595.28 
-  }))
+  // 关键改动：基于页码和数组全局索引生成唯一 ID，防止由于后端不同页的 ID 被重置为0或1，导致前端 document.getElementById 永远定位到第一页
+  const formattedBlocks = flatBlocks.map((b, globalIdx) => {
+      const pIdx = b.page_idx ?? b._page_idx ?? 0;
+      const uniqueId = `block-${pIdx}-${globalIdx}`; 
 
-  // [修复2] 执行严格的顺序排序逻辑
+      return {
+          id: uniqueId,  // 强制替换为全局安全 ID
+          orig_id: b.id ?? b.block_id,
+          page_idx: pIdx,
+          bbox: b.bbox ?? b.block_bbox ?? b.layout_bbox ?? [], 
+          text: b.text ?? b.block_content ?? '',               
+          type: b.type ?? b.block_label ?? 'text',
+          order: b.order ?? b.block_order ?? null,
+          _page_width: b._page_width || 595.28 
+      }
+  })
+
+  // 执行严格的顺序排序逻辑
   formattedBlocks.sort((a, b) => {
-     // 1. 先按页码排序
      if (a.page_idx !== b.page_idx) return a.page_idx - b.page_idx;
      
      const aHasOrder = a.order !== null && a.order !== undefined;
      const bHasOrder = b.order !== null && b.order !== undefined;
      
-     // 2. 如果两者都有真实的顺序，按顺序对比
      if (aHasOrder && bHasOrder) return a.order - b.order;
-     
-     // 3. 把没有阅读顺序的边角料（如页眉、页脚、页码）沉到段落末尾，以免挡在标题前面
      if (aHasOrder && !bHasOrder) return -1;
      if (!aHasOrder && bHasOrder) return 1;
      
-     return 0; // 维持原样
+     return 0;
   });
 
   return formattedBlocks;
 })
 
-
 // =======================================================
-// 🎯 精准双向定位点击 (剥离了所有同步滚动的逻辑)
+// 🎯 精准双向定位点击：加入了抗抖动延迟
 // =======================================================
 
-// 1. 点击左侧 PDF 上的透明热区 -> 右侧对应的 Markdown 亮起黄框，并滚入视野
+// 点击左侧 PDF 上的透明热区 -> 右侧对应的 Markdown 亮起黄框，并滚入视野
 const handlePdfBlockClick = (block: any) => {
   if (!block) return
   activeBlockId.value = block.id 
   
-  // 必须确保在定位视图
-  if (activeTab.value !== 'sync') {
+  const isSwitchingTab = activeTab.value !== 'sync';
+  if (isSwitchingTab) {
     activeTab.value = 'sync';
   }
 
-  nextTick(() => {
+  // 关键修复：使用 setTimeout 替代 nextTick。
+  // 如果从完整文档切换过来，右侧庞大的 DOM（包含 Markdown 表格解析）撑开高度需要一点时间。
+  // 立即获取到的高度是不准的，会导致 scrollIntoView 滑不到中间。
+  const delay = isSwitchingTab ? 150 : 50; 
+
+  setTimeout(() => {
     const el = document.getElementById(`md-block-${block.id}`)
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-  })
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+  }, delay)
 }
 
-// 2. 点击右侧 Markdown 段落 -> 呼叫左侧 PDF 引擎跳转到该页并闪烁红框
+// 点击右侧 Markdown 段落 -> 呼叫左侧 PDF 引擎跳转到该页并闪烁红框
 const handleMarkdownBlockClick = (block: any) => {
   if (!block) return
   activeBlockId.value = block.id 
@@ -344,7 +353,6 @@ onUnmounted(() => { if (stopPolling) stopPolling() })
 .custom-scrollbar::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 4px; background-clip: content-box;}
 .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
 
-/* 防止复用 MarkdownViewer 渲染表格时出现嵌套的卡片内边距 */
 .markdown-table-override :deep(.card) {
   padding: 0;
   border: none;
