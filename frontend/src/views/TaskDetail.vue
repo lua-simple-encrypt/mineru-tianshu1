@@ -204,24 +204,52 @@ const layoutData = computed(() => {
   } 
   else if (jsonContent.pages && Array.isArray(jsonContent.pages)) {
       flatBlocks = jsonContent.pages.flatMap((p: any) => {
-          const blocks = p.blocks || p.parsing_res_list || [];
+          const blocks = p.blocks || p.parsing_res_list || p.res || [];
           const pageIdx = p.page_index ?? p.page_id ?? 0;
           return blocks.map((b: any, i: number) => ({ ...b, _page_idx: pageIdx, _idx: i, _page_width: p.width }))
       })
   }
-  else if (jsonContent.parsing_res_list) {
+  else if (jsonContent.parsing_res_list || jsonContent.res) {
+      const blocks = jsonContent.parsing_res_list || jsonContent.res || [];
       const pageIdx = jsonContent.page_index ?? 0;
-      flatBlocks = jsonContent.parsing_res_list.map((b: any, i: number) => ({ ...b, _page_idx: pageIdx, _idx: i, _page_width: jsonContent.width }))
+      flatBlocks = blocks.map((b: any, i: number) => ({ ...b, _page_idx: pageIdx, _idx: i, _page_width: jsonContent.width }))
   }
 
-  return flatBlocks.map(b => ({
+  const mappedBlocks = flatBlocks.map(b => ({
       id: b.id ?? b.block_id ?? `${b._page_idx}-${b._idx}`,
       page_idx: b.page_idx ?? b._page_idx ?? 0,
       bbox: b.bbox ?? b.block_bbox ?? b.layout_bbox ?? [], 
       text: b.text ?? b.block_content ?? '',               
       type: b.type ?? b.block_label ?? 'text',
+      order: b.order ?? b.block_order ?? null,
       _page_width: b._page_width || 595.28 
   }))
+
+  // 按照 page_idx 和 order 进行排序，修复双向定位阅读顺序
+  mappedBlocks.sort((a, b) => {
+      if (a.page_idx !== b.page_idx) {
+          return a.page_idx - b.page_idx;
+      }
+      
+      // 处理 order: null 的情况，将其排到该页的最后（通常是页眉、页脚、脚注等元信息）
+      const orderA = a.order !== null && a.order !== undefined ? a.order : 999999;
+      const orderB = b.order !== null && b.order !== undefined ? b.order : 999999;
+      
+      if (orderA !== orderB) {
+          return orderA - orderB;
+      }
+      
+      // 若 order 相同或都为 null，则按照 Y 坐标排序
+      const getY = (bbox: any[]) => {
+          if (bbox && bbox.length === 4) {
+              return typeof bbox[0] === 'number' ? bbox[1] : Math.min(...bbox.map((p: any) => p[1]));
+          }
+          return 0;
+      };
+      return getY(a.bbox) - getY(b.bbox);
+  });
+
+  return mappedBlocks;
 })
 
 const handlePdfBlockClick = (block: any) => {
