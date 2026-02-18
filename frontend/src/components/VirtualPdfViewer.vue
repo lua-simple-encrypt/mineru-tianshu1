@@ -30,7 +30,7 @@
               </div>
             </div>
 
-            <canvas :ref="(el) => mountCanvas(el, page)" class="block w-full h-full relative z-0"></canvas>
+            <canvas :id="`pdf-canvas-${page.id}`" :ref="(el) => mountCanvas(el, page)" class="block w-full h-full relative z-0"></canvas>
 
             <div v-if="page.rendered && layoutMap[page.id]" class="absolute inset-0 z-20 pointer-events-none">
               <div
@@ -206,6 +206,10 @@ const currentPage = computed(() => {
   const page = pages.value.find(p => center >= p.top && center <= (p.top + p.height + PAGE_GAP))
   return page ? page.id : 1
 })
+
+const retry = () => {
+    if (props.src) loadPdf(props.src)
+}
 
 const loadPdf = async (url: string) => {
   if (!url) return
