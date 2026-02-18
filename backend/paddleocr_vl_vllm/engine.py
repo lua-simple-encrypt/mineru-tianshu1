@@ -8,6 +8,7 @@ PaddleOCR-VL-VLLM 解析引擎 (Ultimate Optimized Edition)
 3. [双向定位] 输出包含 bbox 的结构化数据 (json_content)，供前端双屏联动，已适配 block_order 排序
 4. [资源管理] 智能显存休眠 (Auto-Sleep) 和自动唤醒 (Auto-Wakeup)
 5. [高可用] 融合 MD 文件本地提取兜底与 PADDLEX_HOME 环境锁定
+6. [并发控制] 拦截底层 HTTP 客户端强制串行化，彻底解决 vLLM 端 Tokenizer 崩溃
 """
 
 import os
@@ -17,6 +18,7 @@ import time
 import requests
 import traceback
 import threading
+import asyncio
 from pathlib import Path
 from typing import Optional, Dict, Any
 from threading import Lock
@@ -27,8 +29,65 @@ from loguru import logger
 # ==============================================================================
 # 1. 限制 PaddleX 内部推理并发数为 1，防止高并发请求冲垮 vLLM 的 Tokenizer
 os.environ["PADDLEX_INFERENCE_PARALLEL_WORKER_NUM"] = "1"
+os.environ["PADDLEX_API_MAX_WORKERS"] = "1"
 # 2. 禁用模型源检查，加快启动速度 (内网环境必备)
 os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
+
+# ==============================================================================
+# 🚨 终极防御：拦截 HTTP 客户端，限制 VLLM 高并发请求
+# 彻底解决 vLLM Tokenizer "RuntimeError: Already borrowed" 崩溃问题
+# ==============================================================================
+try:
+    import httpx
+
+    # 全局信号量，强制完全串行，杜绝远端 Tokenizer 的 Rust 借用冲突
+    _vllm_semaphore = threading.Semaphore(1)  
+
+    # 1. Patch HTTPX (Sync - OpenAI SDK 底层使用)
+    _original_httpx_send = httpx.Client.send
+    def _throttled_httpx_send(self, request, *args, **kwargs):
+        if "chat/completions" in str(request.url):
+            with _vllm_semaphore:
+                return _original_httpx_send(self, request, *args, **kwargs)
+        return _original_httpx_send(self, request, *args, **kwargs)
+    httpx.Client.send = _throttled_httpx_send
+
+    # 2. Patch HTTPX (Async)
+    _original_async_send = httpx.AsyncClient.send
+    _async_semaphores = {}
+    _async_sem_lock = threading.Lock()
+
+    def _get_async_sem():
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.Semaphore(1)
+            
+        with _async_sem_lock:
+            if loop not in _async_semaphores:
+                _async_semaphores[loop] = asyncio.Semaphore(1)
+            return _async_semaphores[loop]
+
+    async def _throttled_async_send(self, request, *args, **kwargs):
+        if "chat/completions" in str(request.url):
+            sem = _get_async_sem()
+            async with sem:
+                return await _original_async_send(self, request, *args, **kwargs)
+        return await _original_async_send(self, request, *args, **kwargs)
+    httpx.AsyncClient.send = _throttled_async_send
+
+    # 3. Patch Requests (Sync - 兼容旧版或第三方库)
+    _original_requests_send = requests.Session.send
+    def _throttled_requests_send(self, request, **kwargs):
+        if hasattr(request, 'url') and "chat/completions" in str(request.url):
+            with _vllm_semaphore:
+                return _original_requests_send(self, request, **kwargs)
+        return _original_requests_send(self, request, **kwargs)
+    requests.Session.send = _throttled_requests_send
+
+    logger.info("🛡️ VLLM Network Throttling Patch applied successfully.")
+except Exception as e:
+    logger.warning(f"⚠️ Failed to patch HTTP clients: {e}")
 # ==============================================================================
 
 class PaddleOCRVLVLLMEngine:
@@ -95,7 +154,7 @@ class PaddleOCRVLVLLMEngine:
             logger.info("🔧 PaddleOCR-VL-VLLM Engine Initialized")
             logger.info(f"   Device: {self.device} (Physical GPU: {self.gpu_id})")
             logger.info(f"   VLLM API: {self.vllm_api_base}")
-            logger.info(f"   Concurrency: Serial Mode (Safe)")
+            logger.info(f"   Concurrency: Serial Mode (Safe Network Patch Active)")
             logger.info(f"   Auto-Sleep: Enabled ({self.idle_timeout}s)")
 
     def _check_gpu_availability(self):
@@ -269,8 +328,11 @@ class PaddleOCRVLVLLMEngine:
                 # 强制转为 list，立即触发底层可能存在的 NoneType 错误
                 output_generator = list(pipeline.predict(**predict_params))
             except Exception as e:
-                logger.warning(f"⚠️ Standard prediction failed (likely VLM empty output): {e}")
-                logger.info("🔄 Retrying with fallback parameters (disabling complex layout parsing)...")
+                logger.warning(f"⚠️ Standard prediction failed (likely VLM empty output/400 Error): {e}")
+                logger.info("🔄 Retrying with fallback parameters (disabling complex layout parsing) in 2 seconds...")
+                
+                # 让远端 vLLM 服务器喘息恢复
+                time.sleep(2)
                 
                 # 降级策略：关闭容易引起模型幻觉或空输出的高级版面分析
                 predict_params["use_layout_parsing"] = False
@@ -406,7 +468,7 @@ class PaddleOCRVLVLLMEngine:
                 "markdown": markdown_text,
                 "markdown_file": str(markdown_file),
                 "json_file": str(json_file),
-                "json_content": full_content_list
+                "json_content": final_json_data
             }
 
         except Exception as e:
