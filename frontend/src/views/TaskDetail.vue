@@ -106,7 +106,7 @@
                   :key="block.id"
                   :id="`md-block-${block.id}`"
                   @click="handleMarkdownBlockClick(block)"
-                  :class="['p-3 rounded-lg transition-all cursor-pointer border break-words w-full text-[14px] leading-relaxed', 
+                  :class="['p-3 rounded-lg transition-all cursor-pointer border break-words w-full text-[14px] leading-relaxed relative', 
                            activeBlockId === block.id 
                              ? 'bg-yellow-50 border-yellow-400 shadow-sm ring-2 ring-yellow-200' 
                              : 'bg-white border-gray-100 hover:bg-gray-50 hover:border-gray-300']"
@@ -116,7 +116,10 @@
                   <div v-else-if="block.type === 'table'" class="text-green-500 text-xs font-semibold mb-1 flex items-center gap-1 select-none"><Table class="w-3.5 h-3.5"/> [提取表格]</div>
                   <div v-else-if="block.type === 'doc_title'" class="text-lg font-bold text-gray-900 mb-1 border-b pb-1">{{ block.text }}</div>
                   
-                  <div v-if="block.type !== 'doc_title'" class="whitespace-pre-wrap font-mono text-gray-600">{{ block.text }}</div>
+                  <div v-if="block.type === 'table'" class="w-full overflow-x-auto mt-2 markdown-table-override">
+                    <MarkdownViewer :content="block.text" />
+                  </div>
+                  <div v-else-if="block.type !== 'doc_title'" class="whitespace-pre-wrap font-mono text-gray-600">{{ block.text }}</div>
                 </div>
               </div>
               <div v-else class="text-gray-500 text-sm italic text-center mt-10">未能提取到结构化版面数据。</div>
@@ -168,7 +171,7 @@ const showPdf = computed(() => layoutMode.value === 'split' || (layoutMode.value
 const showMarkdown = computed(() => layoutMode.value === 'split' || layoutMode.value !== 'single')
 
 // =======================================================
-// 🚀 [核心修复] 超强兼容数据格式化，提取 _page_width 供坐标转换
+// 🚀 [核心修复] 超强兼容数据格式化，执行严格排序
 // =======================================================
 const layoutData = computed(() => {
   const jsonContent = task.value?.data?.json_content
@@ -177,7 +180,15 @@ const layoutData = computed(() => {
   let flatBlocks: any[] = []
 
   if (Array.isArray(jsonContent)) {
-      flatBlocks = jsonContent
+      if (jsonContent.length > 0 && (jsonContent[0].parsing_res_list || jsonContent[0].blocks)) {
+          flatBlocks = jsonContent.flatMap((p: any) => {
+              const blocks = p.parsing_res_list || p.blocks || [];
+              const pageIdx = p.page_index ?? p.page_id ?? 0;
+              return blocks.map((b: any, i: number) => ({ ...b, _page_idx: pageIdx, _idx: i, _page_width: p.width }))
+          })
+      } else {
+          flatBlocks = jsonContent.map((b: any, i: number) => ({ ...b, _idx: i }))
+      }
   } 
   else if (jsonContent.pages && Array.isArray(jsonContent.pages)) {
       flatBlocks = jsonContent.pages.flatMap((p: any) => {
@@ -191,14 +202,35 @@ const layoutData = computed(() => {
       flatBlocks = jsonContent.parsing_res_list.map((b: any, i: number) => ({ ...b, _page_idx: pageIdx, _idx: i, _page_width: jsonContent.width }))
   }
 
-  return flatBlocks.map(b => ({
+  const formattedBlocks = flatBlocks.map(b => ({
       id: b.id ?? b.block_id ?? `${b._page_idx}-${b._idx}`,
       page_idx: b.page_idx ?? b._page_idx ?? 0,
       bbox: b.bbox ?? b.block_bbox ?? b.layout_bbox ?? [], 
       text: b.text ?? b.block_content ?? '',               
       type: b.type ?? b.block_label ?? 'text',
-      _page_width: b._page_width || 595.28 // 提取该页的绝对原生宽度，下传给画布换算比例
+      order: b.order ?? b.block_order ?? null, // [修复1] 提取 order 属性
+      _page_width: b._page_width || 595.28 
   }))
+
+  // [修复2] 执行严格的顺序排序逻辑
+  formattedBlocks.sort((a, b) => {
+     // 1. 先按页码排序
+     if (a.page_idx !== b.page_idx) return a.page_idx - b.page_idx;
+     
+     const aHasOrder = a.order !== null && a.order !== undefined;
+     const bHasOrder = b.order !== null && b.order !== undefined;
+     
+     // 2. 如果两者都有真实的顺序，按顺序对比
+     if (aHasOrder && bHasOrder) return a.order - b.order;
+     
+     // 3. 把没有阅读顺序的边角料（如页眉、页脚、页码）沉到段落末尾，以免挡在标题前面
+     if (aHasOrder && !bHasOrder) return -1;
+     if (!aHasOrder && bHasOrder) return 1;
+     
+     return 0; // 维持原样
+  });
+
+  return formattedBlocks;
 })
 
 
@@ -311,4 +343,15 @@ onUnmounted(() => { if (stopPolling) stopPolling() })
 .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
 .custom-scrollbar::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 4px; background-clip: content-box;}
 .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
+
+/* 防止复用 MarkdownViewer 渲染表格时出现嵌套的卡片内边距 */
+.markdown-table-override :deep(.card) {
+  padding: 0;
+  border: none;
+  box-shadow: none;
+  background: transparent;
+}
+.markdown-table-override :deep(.markdown-viewer) {
+  max-height: none;
+}
 </style>
