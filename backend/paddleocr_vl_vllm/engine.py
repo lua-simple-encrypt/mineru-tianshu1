@@ -1,13 +1,13 @@
 """
-PaddleOCR-VL-VLLM 解析引擎 (Optimized + Bidirectional Layout Support)
+PaddleOCR-VL-VLLM 解析引擎 (Ultimate Optimized Edition)
 单例模式，每个进程只加载一次基础版面识别模型, OCR部分调用配置的API
 
 功能增强:
-1. [修复] 修复 res['res'] 类型不一致导致的 AttributeError 崩溃
-2. [双向定位] 输出包含 bbox 的结构化数据 (json_content)
-3. [资源管理] 智能显存休眠 (Auto-Sleep) 和自动唤醒 (Auto-Wakeup)
-4. [稳定性] 强制单线程推理以解决 vLLM Tokenizer 竞态崩溃
-5. [防崩溃] 增加 VLM NoneType 异常捕获与降级重试机制 (Fallback)
+1. [稳定性] 强制单线程推理以解决 vLLM Tokenizer "Already borrowed" 竞态崩溃问题
+2. [防崩溃] 增加 VLM NoneType 异常捕获与降级重试机制 (Fallback)
+3. [双向定位] 输出包含 bbox 的结构化数据 (json_content)，供前端双屏联动
+4. [资源管理] 智能显存休眠 (Auto-Sleep) 和自动唤醒 (Auto-Wakeup)
+5. [高可用] 融合 MD 文件本地提取兜底与 PADDLEX_HOME 环境锁定
 """
 
 import os
@@ -18,7 +18,7 @@ import requests
 import traceback
 import threading
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 from threading import Lock
 from loguru import logger
 
@@ -33,7 +33,7 @@ os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
 
 class PaddleOCRVLVLLMEngine:
     """
-    PaddleOCR-VL-VLLM 解析引擎（支持双向定位数据输出）
+    PaddleOCR-VL-VLLM 解析引擎（企业级高可用版）
     """
 
     _instance: Optional["PaddleOCRVLVLLMEngine"] = None
@@ -95,6 +95,7 @@ class PaddleOCRVLVLLMEngine:
             logger.info("🔧 PaddleOCR-VL-VLLM Engine Initialized")
             logger.info(f"   Device: {self.device} (Physical GPU: {self.gpu_id})")
             logger.info(f"   VLLM API: {self.vllm_api_base}")
+            logger.info(f"   Concurrency: Serial Mode (Safe)")
             logger.info(f"   Auto-Sleep: Enabled ({self.idle_timeout}s)")
 
     def _check_gpu_availability(self):
@@ -103,6 +104,7 @@ class PaddleOCRVLVLLMEngine:
             if not paddle.is_compiled_with_cuda():
                 logger.error("❌ PaddlePaddle is running on CPU! This model requires GPU.")
                 return
+            
             gpu_name = paddle.device.cuda.get_device_name(self.gpu_id)
             logger.info(f"✅ GPU Detected: {gpu_name}")
         except Exception:
@@ -111,12 +113,16 @@ class PaddleOCRVLVLLMEngine:
     def _check_vllm_health(self) -> bool:
         """检查 VLLM 服务是否健康"""
         try:
+            # 构造健康检查 URL (去除 /v1 后缀)
             base_url = self.vllm_api_base.replace("/v1", "")
             health_url = f"{base_url}/health"
+            
+            # 尝试请求 /health 或 /v1/models
             try:
                 requests.get(health_url, timeout=2)
                 return True
             except:
+                # 回退尝试 models 接口
                 models_url = f"{self.vllm_api_base}/models"
                 resp = requests.get(models_url, timeout=2)
                 return resp.status_code == 200
@@ -125,7 +131,9 @@ class PaddleOCRVLVLLMEngine:
             return False
 
     def _auto_sleep_monitor(self):
-        """[后台线程] 监控空闲状态"""
+        """
+        [后台线程] 监控空闲状态
+        """
         while True:
             time.sleep(10)
             try:
@@ -148,49 +156,66 @@ class PaddleOCRVLVLLMEngine:
             if self._pipeline is not None:
                 return self._pipeline
 
+            # 1. 预检查 VLLM 服务
             if not self._check_vllm_health():
                 logger.error(f"❌ VLLM service unreachable at {self.vllm_api_base}")
+                logger.error("   Please ensure the 'vllm-paddleocr' container is running.")
 
+            logger.info("=" * 60)
             logger.info("📥 Loading PaddleOCR-VL-VLLM Pipeline (Auto-Wakeup)...")
+            logger.info("=" * 60)
+
             try:
                 import paddle
                 from paddleocr import PaddleOCRVL
+
                 if paddle.is_compiled_with_cuda():
                     paddle.set_device(f"gpu:{self.gpu_id}")
 
+                # 设置 PaddleX 主目录
+                pdx_home = os.environ.get("PADDLEX_HOME", "/root/.paddlex")
+                
+                # 初始化管道
                 self._pipeline = PaddleOCRVL(
                     vl_rec_backend="vllm-server",
                     vl_rec_server_url=self.vllm_api_base,
                 )
-                logger.info("✅ Pipeline loaded successfully")
+                
+                logger.info("✅ Pipeline loaded successfully (Serial Mode Active)")
                 return self._pipeline
+
             except Exception as e:
                 logger.error(f"❌ Pipeline load failed: {e}")
+                logger.error(traceback.format_exc())
                 raise
 
     def cleanup(self):
-        """释放显存"""
+        """激进的显存清理"""
         with self._lock:
-            self._pipeline = None 
+            self._pipeline = None # 释放引用
             try:
                 import paddle
                 if paddle.device.is_compiled_with_cuda():
                     paddle.device.cuda.empty_cache()
                 gc.collect()
-                logger.info("✅ GPU Memory released.")
+                logger.info("✅ VRAM released.")
             except:
                 pass
 
     def parse(self, file_path: str, output_path: str, **kwargs) -> Dict[str, Any]:
         """
-        解析文档入口并提取布局数据 (Phase 5 支持)
+        解析文档入口 (增强版：自动唤醒 + 状态维护 + 防崩溃降级)
         """
+        # =========================================================
+        # 1. 状态更新与自动唤醒
+        # =========================================================
         self.is_processing = True
         self.last_active_time = time.time()
         
         if self.is_offloaded:
-            logger.info("🚀 New task received. Waking up engine...")
+            logger.info("🚀 New task received. Waking up PaddleOCR-VLLM engine...")
             self.is_offloaded = False
+            # _load_pipeline() 会自动重建
 
         try:
             file_path = Path(file_path)
@@ -198,21 +223,10 @@ class PaddleOCRVLVLLMEngine:
             output_path.mkdir(parents=True, exist_ok=True)
 
             logger.info(f"🤖 Processing: {file_path.name}")
-
+            
             pipeline = self._load_pipeline()
 
-            # =========================================================
-            # 参数白名单过滤 (修复 NoneType error)
-            # =========================================================
-            allowed_params = {
-                "use_doc_orientation_classify",
-                "use_doc_unwarping",
-                "use_layout_parsing",
-                "use_chart_recognition",
-                "use_seal_recognition",
-                "use_ocr_for_image_block",
-            }
-            
+            # 参数映射
             param_mapping = {
                 "useDocOrientationClassify": "use_doc_orientation_classify",
                 "useDocUnwarping": "use_doc_unwarping",
@@ -220,24 +234,36 @@ class PaddleOCRVLVLLMEngine:
                 "useChartRecognition": "use_chart_recognition",
                 "useSealRecognition": "use_seal_recognition",
                 "useOcrForImageBlock": "use_ocr_for_image_block",
+                "layoutNms": "layout_nms",
+                "markdownIgnoreLabels": "markdown_ignore_labels",
+                "mergeTables": "merge_tables",
+                "relevelTitles": "relevel_titles",
+                "restructurePages": "restructure_pages",
+                "minPixels": "min_pixels",
+                "maxPixels": "max_pixels",
             }
 
             predict_params = {"input": str(file_path)}
             
-            for k, v in kwargs.items():
-                target_key = param_mapping.get(k, k)
-                if target_key in allowed_params:
-                    predict_params[target_key] = v
-                else:
-                    logger.debug(f"ℹ️ Filtered param for VLLM mode: {k}={v}")
+            # 默认参数
+            defaults = {
+                "use_layout_parsing": True,
+                "use_doc_orientation_classify": False,  # 默认关闭以防崩溃
+                "use_doc_unwarping": False,
+                "use_seal_recognition": True
+            }
             
-            # 强制默认值
-            predict_params["use_layout_parsing"] = True
-            predict_params["use_doc_orientation_classify"] = False
-            predict_params["use_doc_unwarping"] = False
+            # 填充参数
+            for k, v in kwargs.items():
+                if k in param_mapping:
+                    predict_params[param_mapping[k]] = v
+            
+            for k, v in defaults.items():
+                if k not in predict_params:
+                    predict_params[k] = v
 
             # =========================================================
-            # 🚨 [关键修复] 执行推理，增加防崩溃重试机制 (Fallback)
+            # 🚨 2. 执行推理，增加防崩溃重试机制 (Fallback)
             # =========================================================
             try:
                 # 强制转为 list，立即触发底层可能存在的 NoneType 错误
@@ -260,36 +286,40 @@ class PaddleOCRVLVLLMEngine:
             markdown_pages = []
             markdown_list_obj = []
             json_list = []
-            full_content_list = [] # [新增] 用于双向定位
+            full_content_list = [] # 用于前端双向定位的高亮框数据
             page_count = 0
 
             for res in output_generator:
                 page_count += 1
-                if res is None: continue
+                
+                # 🛡️ 防御性检查
+                if res is None:
+                    logger.error(f"❌ Page {page_count} returned None result")
+                    continue
 
-                page_dir = output_path / f"page_{page_count}"
-                page_dir.mkdir(parents=True, exist_ok=True)
+                page_output_dir = output_path / f"page_{page_count}"
+                page_output_dir.mkdir(parents=True, exist_ok=True)
 
-                # 1. 保存图片和原始 JSON
+                # 保存中间图和JSON
                 try:
-                    if hasattr(res, "save_to_img"): res.save_to_img(str(page_dir))
-                    if hasattr(res, "save_to_json"): res.save_to_json(str(page_dir))
+                    if hasattr(res, "save_to_img"): res.save_to_img(str(page_output_dir))
+                    if hasattr(res, "save_to_json"): res.save_to_json(str(page_output_dir))
                 except Exception as e:
-                    logger.warning(f"Page {page_count} save error: {e}")
+                    logger.warning(f"⚠️ Failed to save intermediate files for page {page_count}: {e}")
 
-                # 2. [核心修复] 提取结构化数据 (BBox) 用于双向定位
+                # =========================================================
+                # 3. [核心功能] 提取结构化数据 (BBox) 用于双向定位
+                # =========================================================
                 if hasattr(res, "json") and res.json:
                     json_list.append(res.json)
                     if isinstance(res.json, dict) and 'res' in res.json:
                         blocks = res.json['res']
                         
-                        # [FIX] 严格类型检查，防止崩溃
+                        # 严格类型检查，防止崩溃
                         if not isinstance(blocks, list):
-                            # 如果是单个对象且有bbox，包装成列表
                             if isinstance(blocks, dict) and ('bbox' in blocks or 'layout_bbox' in blocks):
                                 blocks = [blocks]
                             else:
-                                # 可能是元数据（如 'input_path'），跳过
                                 blocks = []
 
                         for block in blocks:
@@ -306,41 +336,65 @@ class PaddleOCRVLVLLMEngine:
                             if clean_block['bbox']:
                                 full_content_list.append(clean_block)
 
-                # 3. 提取 Markdown
-                page_md = ""
+                # =========================================================
+                # 4. 提取 Markdown (带本地文件读取兜底机制)
+                # =========================================================
                 if hasattr(res, "markdown") and res.markdown:
                     markdown_list_obj.append(res.markdown)
-                    if isinstance(res.markdown, dict):
-                        page_md = res.markdown.get('markdown_texts', '')
-                    elif hasattr(res.markdown, 'markdown_texts'):
-                        page_md = res.markdown.markdown_texts
-                    else:
-                        page_md = str(res.markdown)
-                
+
+                page_md = ""
+                try:
+                    if hasattr(res, "markdown") and res.markdown:
+                        if isinstance(res.markdown, dict):
+                            page_md = res.markdown.get('markdown_texts', '') or res.markdown.get('text', '')
+                        elif hasattr(res.markdown, 'markdown_texts'):
+                            page_md = res.markdown.markdown_texts
+                        else:
+                            page_md = str(res.markdown)
+                    elif hasattr(res, "str") and res.str:
+                        page_md = str(res.str)
+                except Exception as e:
+                    logger.warning(f"⚠️ Error extracting markdown from page {page_count}: {e}")
+
                 if page_md:
                     markdown_pages.append(page_md)
+                else:
+                    # 兜底：尝试读取由于 save_to_markdown 生成的文件
+                    try:
+                         if hasattr(res, "save_to_markdown"):
+                            res.save_to_markdown(str(page_output_dir))
+                            saved = list(page_output_dir.glob("*.md"))
+                            if saved:
+                                markdown_pages.append(saved[0].read_text(encoding="utf-8"))
+                    except:
+                        pass
                 
                 logger.info(f"✅ Processed Page {page_count}")
 
-            # 合并 Markdown
+            # 合并结果
+            logger.info(f"🎉 Processing complete. Total pages: {page_count}")
+
+            markdown_text = ""
+            # 尝试使用官方合并算法
             if hasattr(pipeline, "concatenate_markdown_pages") and markdown_list_obj:
                 try:
                     markdown_text = pipeline.concatenate_markdown_pages(markdown_list_obj)
-                except:
+                except Exception as e:
+                    logger.warning(f"Official concat failed: {e}, falling back to simple join")
                     markdown_text = "\n\n---\n\n".join(markdown_pages)
             else:
                 markdown_text = "\n\n---\n\n".join(markdown_pages)
 
             # 保存最终文件
-            (output_path / "result.md").write_text(markdown_text, encoding="utf-8")
+            markdown_file = output_path / "result.md"
+            markdown_file.write_text(markdown_text, encoding="utf-8")
             
-            # [关键] 构造 result.json
-            final_json_data = full_content_list if full_content_list else {
-                "total_pages": page_count,
-                "pages": json_list
-            }
-            
+            # 构造 result.json (包含给前端定位用的 full_content_list)
             json_file = output_path / "result.json"
+            final_json_data = full_content_list if full_content_list else {
+                "pages": json_list, 
+                "total_pages": page_count
+            }
             with open(json_file, "w", encoding="utf-8") as f:
                 json.dump(final_json_data, f, ensure_ascii=False, indent=2)
 
@@ -348,19 +402,24 @@ class PaddleOCRVLVLLMEngine:
                 "success": True,
                 "output_path": str(output_path),
                 "markdown": markdown_text,
-                "markdown_file": str(output_path / "result.md"),
+                "markdown_file": str(markdown_file),
                 "json_file": str(json_file),
                 "json_content": full_content_list
             }
 
         except Exception as e:
-            logger.error(f"❌ OCR Pipeline Error: {e}")
+            logger.error(f"❌ OCR Pipeline Critical Error: {e}")
             logger.error(traceback.format_exc())
             raise
         finally:
+            # =========================================================
+            # [性能优化]
+            # 移除强制 cleanup()，让模型保持加载状态
+            # 更新时间戳，让后台线程在空闲5分钟后处理释放
+            # =========================================================
             self.is_processing = False
             self.last_active_time = time.time()
-            logger.info("🏁 Task finished. Model stays loaded (5min auto-sleep).")
+            logger.info("🏁 Task finished. Pipeline remains loaded for fast reuse.")
 
 # 全局单例
 _engine = None
