@@ -89,7 +89,10 @@
             </button>
           </div>
           
-          <div class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden bg-white relative custom-scrollbar p-6 scroll-smooth">
+          <div :class="[
+            'flex-1 min-h-0 relative bg-white',
+            activeTab === 'json' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto overflow-x-hidden custom-scrollbar p-6 scroll-smooth'
+          ]">
             
             <div v-if="activeTab === 'markdown'" class="w-full">
                <MarkdownViewer :content="task.data?.content || ''" />
@@ -125,7 +128,10 @@
               <div v-else class="text-gray-500 text-sm italic text-center mt-10">未能提取到结构化版面数据。</div>
             </div>
 
-            <div v-else class="h-full w-full"><JsonViewer :data="task.data?.json_content || {}" /></div>
+            <div v-else class="h-full w-full flex-1 flex min-h-0">
+               <JsonViewer :data="task.data?.json_content || {}" />
+            </div>
+            
           </div>
         </div>
 
@@ -170,9 +176,6 @@ const pdfUrl = computed(() => task.value?.data?.pdf_path ? `/api/v1/files/output
 const showPdf = computed(() => layoutMode.value === 'split' || (layoutMode.value === 'single' && pdfUrl.value))
 const showMarkdown = computed(() => layoutMode.value === 'split' || layoutMode.value !== 'single')
 
-// =======================================================
-// 🚀 核心修复：防止多页 block.id 冲突，强制生成全局唯一 ID
-// =======================================================
 const layoutData = computed(() => {
   const jsonContent = task.value?.data?.json_content
   if (!jsonContent) return []
@@ -234,10 +237,6 @@ const layoutData = computed(() => {
   return formattedBlocks;
 })
 
-// =======================================================
-// 🎯 精准双向定位点击：加入了抗抖动延迟
-// =======================================================
-
 const handlePdfBlockClick = (block: any) => {
   if (!block) return
   activeBlockId.value = block.id 
@@ -267,9 +266,6 @@ const handleMarkdownBlockClick = (block: any) => {
   }
 }
 
-// =======================================================
-// 生命周期与基础逻辑
-// =======================================================
 const setMode = (mode: 'split' | 'single') => { layoutMode.value = mode }
 let stopPolling: (() => void) | null = null
 
@@ -285,7 +281,6 @@ function startPolling() {
   stopPolling = taskStore.pollTaskStatus(taskId.value, 3000, async (updatedTask) => {
     if (['completed', 'failed', 'cancelled'].includes(updatedTask.status)) {
       stopPolling()
-      // [修复核心]：任务完成后，自动执行一次全量拉取数据（包含 json_content）
       await refreshTask()
     }
   })
