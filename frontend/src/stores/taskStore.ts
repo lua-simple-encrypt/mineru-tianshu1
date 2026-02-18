@@ -131,7 +131,7 @@ export const useTaskStore = defineStore('task', () => {
   }
 
   // =================================================================
-  // 新增核心 Action：重试、暂停、恢复、清理、彻底删除
+  // 新增核心 Action：重试、暂停、恢复、清理
   // =================================================================
 
   /**
@@ -214,27 +214,6 @@ export const useTaskStore = defineStore('task', () => {
     }
   }
 
-  /**
-   * 彻底删除任务
-   */
-  async function deleteTask(taskId: string) {
-    try {
-      const response = await taskApi.deleteTask(taskId)
-      // 成功后，从本地列表中移除该任务
-      tasks.value = tasks.value.filter(t => t.task_id !== taskId)
-      total.value = Math.max(0, total.value - 1)
-      
-      // 如果当前详情页正在展示该任务，清空它
-      if (currentTask.value?.task_id === taskId) {
-        currentTask.value = null
-      }
-      return response
-    } catch (err: any) {
-      error.value = err.message || '彻底删除任务失败'
-      throw err
-    }
-  }
-
   // ----------------------------------------------------------------
   // 辅助函数
   // ----------------------------------------------------------------
@@ -312,7 +291,6 @@ export const useTaskStore = defineStore('task', () => {
     resumeTask,     
     clearTaskCache, 
     clearFailedTasks,
-    deleteTask,       // ✅ 在此暴露给 Vue 组件使用
     pollTaskStatus,
     clearError,
     reset
